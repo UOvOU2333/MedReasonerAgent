@@ -1,3 +1,7 @@
+from tools.llm import call_llm
+from tools.trace import append_trace
+
+
 def supervisor_agent(state):
     """
     决定流程策略（单跳 / 多跳 / 深度推理）
@@ -16,10 +20,7 @@ Decide workflow:
 
     decision = call_llm(prompt)
 
-    state["trace"].append({
-        "node": "supervisor",
-        "output": decision
-    })
+    append_trace(state, "supervisor", decision)
 
     state["plan"] = {"mode": decision}
     return state

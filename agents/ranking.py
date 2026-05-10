@@ -1,3 +1,6 @@
+from tools.trace import append_trace
+
+
 def ranking_agent(state):
     paths = state["reasoning_paths"]
 
@@ -6,9 +9,6 @@ def ranking_agent(state):
 
     state["ranked_paths"] = ranked
 
-    state["trace"].append({
-        "node": "ranking_agent",
-        "output": ranked[:2]
-    })
+    append_trace(state, "ranking", ranked[:2])
 
     return state

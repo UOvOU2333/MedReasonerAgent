@@ -1,6 +1,10 @@
+from runtime.router import router
+from tools.trace import append_trace
+
+
 def reasoning_agent(state):
     prompt = f"""
-You are a biomedical reasoning agent.
+Biomedical reasoning:
 
 Entities: {state['entities']}
 Graph: {state['subgraph']}
@@ -10,13 +14,10 @@ Task:
 - explain mechanism
 """
 
-    result = call_llm(prompt)
+    result = router.reason(prompt)
 
     state["reasoning_paths"] = [result]
 
-    state["trace"].append({
-        "node": "reasoning_agent",
-        "output": result
-    })
+    append_trace(state, "reasoning", result)
 
     return state

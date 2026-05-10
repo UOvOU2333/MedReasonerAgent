@@ -1,4 +1,5 @@
 from tools.llm import call_llm
+from tools.trace import append_trace
 
 def medical_report_agent(state):
     prompt = f"""
@@ -19,15 +20,10 @@ Return structured JSON.
 
     result = call_llm(prompt)
 
-    report = {
-        "raw": result
-    }
+    report = {"text": result, "warning": "AI-generated clinical summary for review only."}
 
     state["medical_report"] = report
 
-    state["trace"].append({
-        "node": "medical_report_agent",
-        "output": report
-    })
+    append_trace(state, "medical_report", report)
 
     return state

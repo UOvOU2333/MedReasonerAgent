@@ -1,11 +1,11 @@
-from typing import TypedDict, List, Any
+from typing import Any, List, TypedDict
 
 class DRGState(TypedDict):
     query: str
 
     # core KG
     entities: List[str]
-    subgraph: Any
+    subgraph: dict[str, Any]
 
     # reasoning
     reasoning_paths: List[Any]
@@ -16,6 +16,7 @@ class DRGState(TypedDict):
     treatment_plan: dict
 
     answer: str
+    plan: dict
 
     # 可视化关键
     trace: List[dict]
