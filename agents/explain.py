@@ -3,6 +3,7 @@ from tools.trace import append_trace
 
 
 def explain_agent(state):
+    language = "Chinese" if state.get("language") == "zh" else "English"
     prompt = f"""
 Explain the biomedical reasoning:
 
@@ -14,6 +15,8 @@ Medical report:
 
 Treatment plan:
 {state.get('treatment_plan')}
+
+Reply in {language}. Use user-friendly language and include medical limitations.
 """
 
     answer = call_llm(prompt)

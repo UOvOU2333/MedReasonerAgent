@@ -49,49 +49,16 @@ textarea {
   font-weight: 700;
 }
 
-.query-form {
-  display: grid;
-  grid-template-columns: minmax(280px, 1fr) auto;
-  gap: 10px;
-  width: min(760px, 100%);
-}
-
-.query-form input {
-  min-width: 0;
-  height: 38px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0 12px;
-}
-
-.query-form button {
-  height: 38px;
-  border: 0;
-  border-radius: 6px;
-  padding: 0 14px;
-  background: var(--accent);
-  color: white;
-  cursor: pointer;
+.run-status {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(420px, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr) 380px;
   min-height: 0;
-}
-
-.graph-pane {
-  min-height: 620px;
-  border-right: 1px solid var(--border);
-}
-
-.side-pane {
-  min-width: 0;
-  overflow: auto;
-  padding: 16px;
-  display: grid;
-  gap: 14px;
-  align-content: start;
+  height: calc(100vh - 61px);
 }
 
 .panel {
@@ -122,11 +89,13 @@ textarea {
 
   .workspace {
     display: block;
+    height: auto;
   }
 
-  .graph-pane {
-    min-height: 520px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+  .tool-tree,
+  .run-tree {
+    height: 560px;
+    border-left: 0;
+    border-top: 1px solid var(--border);
   }
 }

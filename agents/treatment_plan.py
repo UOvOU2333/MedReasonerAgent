@@ -2,6 +2,7 @@ from tools.llm import call_llm
 from tools.trace import append_trace
 
 def treatment_plan_agent(state):
+    language = "Chinese" if state.get("language") == "zh" else "English"
     prompt = f"""
 You are a clinical treatment planning agent.
 
@@ -19,7 +20,7 @@ Generate:
 4. confidence level
 5. warnings / limitations
 
-Return structured JSON.
+Return structured JSON in {language}.
 """
 
     result = call_llm(prompt)

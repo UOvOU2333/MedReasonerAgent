@@ -11,11 +11,12 @@ function wsUrl(path: string) {
 
 export function streamReasoning(
   query: string,
+  language: "zh" | "en",
   onEvent: (event: TraceEvent) => void,
   onClose?: () => void,
 ) {
   const socket = new WebSocket(wsUrl("/ws/run"));
-  socket.onopen = () => socket.send(JSON.stringify({query}));
+  socket.onopen = () => socket.send(JSON.stringify({query, language}));
   socket.onmessage = (message) => onEvent(JSON.parse(message.data));
   socket.onclose = () => onClose?.();
   socket.onerror = () => onEvent({event: "error", node: "websocket"});

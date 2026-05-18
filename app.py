@@ -23,11 +23,17 @@ graph = build_graph()
 
 class RunRequest(BaseModel):
     query: str
+    language: str = "zh"
 
 
-def initial_state(query: str) -> dict[str, Any]:
+def normalize_language(language: str | None) -> str:
+    return "en" if language == "en" else "zh"
+
+
+def initial_state(query: str, language: str = "zh") -> dict[str, Any]:
     return {
         "query": query,
+        "language": normalize_language(language),
         "entities": [],
         "subgraph": {},
         "reasoning_paths": [],
@@ -47,7 +53,7 @@ def health():
 
 @app.post("/run")
 def run(request: RunRequest):
-    result = graph.invoke(initial_state(request.query))
+    result = graph.invoke(initial_state(request.query, request.language))
 
     return {
         "answer": result["answer"],
@@ -76,11 +82,12 @@ async def websocket_run(websocket: WebSocket):
     try:
         payload = await websocket.receive_json()
         query = payload.get("query", "")
+        language = normalize_language(payload.get("language"))
         if not query:
             await websocket.send_json({"event": "error", "message": "query is required"})
             return
 
-        task = asyncio.create_task(asyncio.to_thread(graph.invoke, initial_state(query)))
+        task = asyncio.create_task(asyncio.to_thread(graph.invoke, initial_state(query, language)))
 
         while True:
             if task.done() and queue.empty():

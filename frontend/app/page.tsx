@@ -1,28 +1,31 @@
 "use client";
 
 import { FormEvent, useRef, useState } from "react";
-import { Play } from "lucide-react";
 import AgentGraph from "../components/AgentGraph";
-import ReportCard from "../components/ReportCard";
-import TracePanel from "../components/TracePanel";
-import TreatmentCard from "../components/TreatmentCard";
+import ConversationPanel from "../components/ConversationPanel";
 import { streamReasoning } from "../lib/websocket";
 import { useTraceStore } from "../store/traceStore";
 
 export default function Home() {
   const [query, setQuery] = useState("Patient has chest pain, fever, diabetes risk, and abnormal inflammatory markers.");
   const [running, setRunning] = useState(false);
+  const language = useTraceStore((state) => state.language);
   const addEvent = useTraceStore((state) => state.addEvent);
-  const reset = useTraceStore((state) => state.reset);
+  const setLanguage = useTraceStore((state) => state.setLanguage);
+  const startRun = useTraceStore((state) => state.startRun);
   const stopRef = useRef<null | (() => void)>(null);
 
   function submit(event: FormEvent) {
     event.preventDefault();
+    if (!query.trim()) {
+      return;
+    }
     stopRef.current?.();
-    reset();
+    startRun(query, language);
     setRunning(true);
     stopRef.current = streamReasoning(
       query,
+      language,
       (traceEvent) => {
         addEvent(traceEvent);
         if (traceEvent.event === "complete" || traceEvent.event === "error") {
@@ -37,35 +40,19 @@ export default function Home() {
     <main className="shell">
       <header className="topbar">
         <div className="brand">MedReasonerAgent</div>
-        <form className="query-form" onSubmit={submit}>
-          <input value={query} onChange={(event) => setQuery(event.target.value)} />
-          <button type="submit" disabled={running}>
-            <Play size={16} /> {running ? "Running" : "Run"}
-          </button>
-        </form>
+        <div className="run-status">{running ? (language === "zh" ? "多 Agent 推理中" : "Running multi-agent reasoning") : language === "zh" ? "就绪" : "Ready"}</div>
       </header>
       <section className="workspace">
-        <div className="graph-pane">
-          <AgentGraph />
-        </div>
-        <aside className="side-pane">
-          <TracePanel />
-          <ReportCard />
-          <TreatmentCard />
-        </aside>
+        <ConversationPanel
+          query={query}
+          running={running}
+          language={language}
+          onQueryChange={setQuery}
+          onLanguageChange={setLanguage}
+          onSubmit={submit}
+        />
+        <AgentGraph />
       </section>
-      <style jsx>{`
-        button {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-        }
-        button:disabled {
-          opacity: 0.68;
-          cursor: wait;
-        }
-      `}</style>
     </main>
   );
 }

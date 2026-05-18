@@ -3,19 +3,27 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from dotenv import load_dotenv
 from openai import OpenAI
+
+load_dotenv()
 
 
 def call_llm(prompt: str, metadata: dict[str, Any] | None = None) -> str:
-    if not os.getenv("OPENAI_API_KEY"):
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
         return offline_response(prompt, metadata=metadata)
 
-    client = OpenAI()
-    resp = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-    )
+    client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL") or None)
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if model != "deepseek-reasoner":
+        request["temperature"] = float(os.getenv("LLM_TEMPERATURE", "0.2"))
+
+    resp = client.chat.completions.create(**request)
     return resp.choices[0].message.content or ""
 
 

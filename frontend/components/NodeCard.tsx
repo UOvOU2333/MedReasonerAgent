@@ -5,6 +5,7 @@ type Props = {
     label: string;
     active?: boolean;
     complete?: boolean;
+    selectedTool?: string;
   };
 };
 
@@ -13,7 +14,10 @@ export default function NodeCard({ data }: Props) {
   return (
     <div className={`node-card ${status}`}>
       {data.complete ? <CheckCircle2 size={18} /> : data.active ? <Clock3 size={18} /> : <Brain size={18} />}
-      <span>{data.label}</span>
+      <div>
+        <span>{data.label}</span>
+        {data.selectedTool ? <small>{data.selectedTool}</small> : null}
+      </div>
     </div>
   );
 }

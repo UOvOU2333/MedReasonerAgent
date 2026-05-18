@@ -7,6 +7,7 @@ def supervisor_agent(state):
     决定流程策略（单跳 / 多跳 / 深度推理）
     """
 
+    language = "Chinese" if state.get("language") == "zh" else "English"
     prompt = f"""
 You are a supervisor for a biomedical KG reasoning system.
 
@@ -16,6 +17,8 @@ Decide workflow:
 - simple
 - multi-hop
 - deep-reasoning
+
+Reply in {language}.
 """
 
     decision = call_llm(prompt)

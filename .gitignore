@@ -237,3 +237,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# macOS
+.DS_Store
+
+# docs
+docs/convert.py
+docs/requirements.docx

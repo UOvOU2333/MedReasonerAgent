@@ -2,6 +2,7 @@ from typing import Any, List, TypedDict
 
 class DRGState(TypedDict):
     query: str
+    language: str
 
     # core KG
     entities: List[str]

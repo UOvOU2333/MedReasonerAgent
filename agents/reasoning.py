@@ -3,6 +3,7 @@ from tools.trace import append_trace
 
 
 def reasoning_agent(state):
+    language = "Chinese" if state.get("language") == "zh" else "English"
     prompt = f"""
 Biomedical reasoning:
 
@@ -12,6 +13,8 @@ Graph: {state['subgraph']}
 Task:
 - find multi-hop biological reasoning paths
 - explain mechanism
+
+Reply in {language}.
 """
 
     result = router.reason(prompt)
