@@ -244,3 +244,5 @@ pnpm-debug.log*
 # docs
 docs/convert.py
 docs/requirements.docx
+docs/coursework
+docs/requirements-writing-logic.md
