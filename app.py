@@ -7,7 +7,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from graph.workflow import build_graph
+from graph.workflow import build_graph, build_docgen_graph, build_vdoc_graph
 from runtime.event_bus import event_bus
 
 app = FastAPI()
@@ -18,19 +18,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-graph = build_graph()
+
+# 三个智能体系统的工作流图
+drg_graph = build_graph()
+docgen_graph = build_docgen_graph()
+vdoc_graph = build_vdoc_graph()
 
 
 class RunRequest(BaseModel):
     query: str
     language: str = "zh"
+    mode: str = "drg"  # drg | docgen | vdoc
+    doc_type: str = ""  # requirements | architecture | testing (docgen 专用)
+    project_name: str = "MedReasonerAgent"
 
 
 def normalize_language(language: str | None) -> str:
     return "en" if language == "en" else "zh"
 
 
-def initial_state(query: str, language: str = "zh") -> dict[str, Any]:
+# ── DRG 入组智能体初始状态 ──
+def drg_initial_state(query: str, language: str = "zh") -> dict[str, Any]:
     return {
         "query": query,
         "language": normalize_language(language),
@@ -46,6 +54,80 @@ def initial_state(query: str, language: str = "zh") -> dict[str, Any]:
     }
 
 
+# ── 文档自动生成智能体初始状态 ──
+def docgen_initial_state(query: str, language: str = "zh",
+                         doc_type: str = "", project_name: str = "MedReasonerAgent") -> dict[str, Any]:
+    return {
+        "query": query,
+        "language": normalize_language(language),
+        "doc_type": doc_type or "requirements",
+        "project_name": project_name,
+        "code_analysis": {},
+        "context_data": {},
+        "doc_draft": "",
+        "doc_formatted": "",
+        "doc_final": "",
+        "review_report": {},
+        "answer": "",
+        "trace": [],
+    }
+
+
+# ── 虚拟文档系统智能体初始状态 ──
+def vdoc_initial_state(query: str, language: str = "zh",
+                       doc_name: str = "", doc_content: str = "",
+                       doc_type: str = "", project_name: str = "MedReasonerAgent") -> dict[str, Any]:
+    return {
+        "query": query,
+        "language": normalize_language(language),
+        "doc_name": doc_name,
+        "doc_content": doc_content,
+        "doc_type": doc_type or "unknown",
+        "project_name": project_name,
+        "validation_result": {},
+        "doc_metadata": {},
+        "storage_path": "",
+        "index_status": {},
+        "notification": {},
+        "answer": "",
+        "trace": [],
+    }
+
+
+def select_graph(mode: str):
+    """根据 mode 选择对应的 LangGraph 工作流。"""
+    if mode == "docgen":
+        return docgen_graph
+    if mode == "vdoc":
+        return vdoc_graph
+    return drg_graph  # 默认 DRG
+
+
+def select_initial_state(mode: str, request: RunRequest) -> dict[str, Any]:
+    """根据 mode 构建对应的初始状态。"""
+    if mode == "docgen":
+        return docgen_initial_state(
+            query=request.query,
+            language=request.language,
+            doc_type=request.doc_type,
+            project_name=request.project_name,
+        )
+    if mode == "vdoc":
+        return vdoc_initial_state(
+            query=request.query,
+            language=request.language,
+            doc_name=request.project_name or request.query,
+            doc_content="",
+            doc_type=request.doc_type,
+            project_name=request.project_name,
+        )
+    return drg_initial_state(request.query, request.language)
+
+
+# ═══════════════════════════════════════════════════
+#  API Endpoints
+# ═══════════════════════════════════════════════════
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -53,15 +135,29 @@ def health():
 
 @app.post("/run")
 def run(request: RunRequest):
-    result = graph.invoke(initial_state(request.query, request.language))
+    mode = request.mode or "drg"
+    graph = select_graph(mode)
+    state = select_initial_state(mode, request)
+    result = graph.invoke(state)
 
-    return {
-        "answer": result["answer"],
-        "trace": result["trace"],
-        "medical_report": result.get("medical_report", {}),
-        "treatment_plan": result.get("treatment_plan", {}),
-        "state": result,
+    # 根据 mode 构建不同响应
+    base = {
+        "answer": result.get("answer", ""),
+        "trace": result.get("trace", []),
+        "mode": mode,
     }
+    if mode == "drg":
+        base["medical_report"] = result.get("medical_report", {})
+        base["treatment_plan"] = result.get("treatment_plan", {})
+    elif mode == "docgen":
+        base["doc_final"] = result.get("doc_final", "")
+        base["doc_type"] = result.get("doc_type", "")
+        base["review_report"] = result.get("review_report", {})
+    elif mode == "vdoc":
+        base["storage_path"] = result.get("storage_path", "")
+        base["notification"] = result.get("notification", {})
+    base["state"] = result
+    return base
 
 
 @app.get("/trace/replay")
@@ -69,6 +165,7 @@ def replay_trace():
     return {"events": event_bus.replay()}
 
 
+# ── 通用 WebSocket 端点（支持 mode 切换） ──
 @app.websocket("/ws/run")
 async def websocket_run(websocket: WebSocket):
     await websocket.accept()
@@ -83,11 +180,24 @@ async def websocket_run(websocket: WebSocket):
         payload = await websocket.receive_json()
         query = payload.get("query", "")
         language = normalize_language(payload.get("language"))
-        if not query:
+        mode = payload.get("mode", "drg")
+        doc_type = payload.get("doc_type", "")
+        project_name = payload.get("project_name", "MedReasonerAgent")
+
+        if not query and mode == "drg":
             await websocket.send_json({"event": "error", "message": "query is required"})
             return
 
-        task = asyncio.create_task(asyncio.to_thread(graph.invoke, initial_state(query, language)))
+        graph = select_graph(mode)
+        state: dict[str, Any]
+        if mode == "docgen":
+            state = docgen_initial_state(query, language, doc_type, project_name)
+        elif mode == "vdoc":
+            state = vdoc_initial_state(query, language, doc_name=project_name, doc_type=doc_type, project_name=project_name)
+        else:
+            state = drg_initial_state(query, language)
+
+        task = asyncio.create_task(asyncio.to_thread(graph.invoke, state))
 
         while True:
             if task.done() and queue.empty():
@@ -96,6 +206,7 @@ async def websocket_run(websocket: WebSocket):
                     {
                         "event": "complete",
                         "node": "complete",
+                        "mode": mode,
                         "state": result,
                         "answer": result.get("answer", ""),
                         "trace": result.get("trace", []),
@@ -113,3 +224,59 @@ async def websocket_run(websocket: WebSocket):
         pass
     finally:
         unsubscribe()
+
+
+# ── 文档生成专用端点 ──
+@app.post("/docgen/generate")
+def docgen_generate(request: RunRequest):
+    """生成并保存文档：先 docgen 生成文档，再 vdoc 存储。"""
+    # Step 1: 文档生成
+    gen_state = docgen_initial_state(
+        query=request.query,
+        language=request.language,
+        doc_type=request.doc_type,
+        project_name=request.project_name,
+    )
+    gen_result = docgen_graph.invoke(gen_state)
+
+    doc_final = gen_result.get("doc_final", "")
+    if not doc_final:
+        # 审核未通过，用格式化版本
+        doc_final = gen_result.get("doc_formatted", gen_result.get("doc_draft", ""))
+
+    # Step 2: 虚拟文档系统存储
+    vdoc_state = vdoc_initial_state(
+        query=f"Store document: {request.doc_type}",
+        language=request.language,
+        doc_name=request.project_name,
+        doc_content=doc_final,
+        doc_type=gen_result.get("doc_type", request.doc_type),
+        project_name=request.project_name,
+    )
+    vdoc_result = vdoc_graph.invoke(vdoc_state)
+
+    return {
+        "answer": vdoc_result.get("answer", ""),
+        "doc_final": doc_final,
+        "doc_type": gen_result.get("doc_type", ""),
+        "review_report": gen_result.get("review_report", {}),
+        "storage_path": vdoc_result.get("storage_path", ""),
+        "notification": vdoc_result.get("notification", {}),
+        "trace": gen_result.get("trace", []),
+        "vdoc_trace": vdoc_result.get("trace", []),
+    }
+
+
+# ── 已保存文档列表 ──
+@app.get("/docgen/docs")
+def list_documents():
+    """列出 generated_docs 中已保存的文档。"""
+    import json
+    import os
+
+    index_path = os.path.join(os.path.dirname(__file__), "generated_docs", "index.json")
+    if os.path.exists(index_path):
+        with open(index_path, "r", encoding="utf-8") as f:
+            index = json.load(f)
+        return {"documents": index.get("documents", []), "last_updated": index.get("last_updated", "")}
+    return {"documents": [], "last_updated": ""}

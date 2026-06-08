@@ -61,6 +61,12 @@ textarea {
   height: calc(100vh - 61px);
 }
 
+/* DocGen/VDoc tabs use single-column layout */
+.workspace:has(.docgen-panel),
+.workspace:has(.vdoc-panel) {
+  grid-template-columns: 1fr;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);

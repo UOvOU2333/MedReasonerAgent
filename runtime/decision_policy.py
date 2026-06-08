@@ -14,6 +14,7 @@ class Decision:
 
 
 GRAPH_PARENTS: dict[str, str | None] = {
+    # DRG 入组智能体
     "supervisor": None,
     "entity": "supervisor",
     "medical_report": "entity",
@@ -22,6 +23,21 @@ GRAPH_PARENTS: dict[str, str | None] = {
     "ranking": "reasoning",
     "treatment_plan": "ranking",
     "explain": "treatment_plan",
+
+    # 文档自动生成智能体
+    "doc_supervisor": None,
+    "code_scanner": "doc_supervisor",
+    "context_collector": "code_scanner",
+    "doc_composer": "context_collector",
+    "doc_formatter": "doc_composer",
+    "doc_reviewer": "doc_formatter",
+
+    # 虚拟文档系统智能体
+    "doc_receiver": None,
+    "doc_validator": "doc_receiver",
+    "doc_metadata_tagger": "doc_validator",
+    "doc_storer": "doc_metadata_tagger",
+    "doc_notifier": "doc_storer",
 }
 
 
@@ -60,6 +76,32 @@ class DecisionPolicy:
             return ["treatment_generator", "drug_candidate_lookup", "warning_checker"]
         if node_name == "explain":
             return ["trace_summarizer", "plain_language_explainer", "limitation_writer"]
+
+        # ── 文档自动生成智能体 ──
+        if node_name == "doc_supervisor":
+            return ["requirements_router", "architecture_router", "testing_router"]
+        if node_name == "code_scanner":
+            return ["structure_scanner", "dependency_analyzer", "api_inspector"]
+        if node_name == "context_collector":
+            return ["readme_parser", "config_extractor", "docstring_collector"]
+        if node_name == "doc_composer":
+            return ["requirements_composer", "architecture_composer", "testing_composer"]
+        if node_name == "doc_formatter":
+            return ["markdown_formatter", "table_aligner", "section_numberer"]
+        if node_name == "doc_reviewer":
+            return ["completeness_checker", "format_validator", "numbering_auditor"]
+
+        # ── 虚拟文档系统智能体 ──
+        if node_name == "doc_receiver":
+            return ["content_ingestor", "format_detector", "source_tagger"]
+        if node_name == "doc_validator":
+            return ["structure_validator", "section_counter", "metadata_checker"]
+        if node_name == "doc_metadata_tagger":
+            return ["version_tagger", "date_stamper", "author_recorder"]
+        if node_name == "doc_storer":
+            return ["filesystem_writer", "backup_handler", "path_resolver"]
+        if node_name == "doc_notifier":
+            return ["index_updater", "event_emitter", "log_recorder"]
         return []
 
     def _select_option(self, node_name: str, state: dict[str, Any], options: list[str]) -> str | None:
@@ -97,6 +139,43 @@ class DecisionPolicy:
             return "warning_checker" if "warning" in plan else "treatment_generator"
         if node_name == "explain":
             return "plain_language_explainer"
+
+        # ── 文档自动生成智能体 ──
+        if node_name == "doc_supervisor":
+            doc_type = str(state.get("doc_type", "")).lower()
+            if "architecture" in doc_type or "架构" in doc_type:
+                return "architecture_router"
+            if "testing" in doc_type or "test" in doc_type or "测试" in doc_type:
+                return "testing_router"
+            return "requirements_router"
+        if node_name == "code_scanner":
+            return "structure_scanner"
+        if node_name == "context_collector":
+            return "readme_parser"
+        if node_name == "doc_composer":
+            doc_type = str(state.get("doc_type", "")).lower()
+            if "architecture" in doc_type or "架构" in doc_type:
+                return "architecture_composer"
+            if "testing" in doc_type or "test" in doc_type or "测试" in doc_type:
+                return "testing_composer"
+            return "requirements_composer"
+        if node_name == "doc_formatter":
+            return "markdown_formatter"
+        if node_name == "doc_reviewer":
+            return "completeness_checker"
+
+        # ── 虚拟文档系统智能体 ──
+        if node_name == "doc_receiver":
+            return "content_ingestor"
+        if node_name == "doc_validator":
+            return "structure_validator"
+        if node_name == "doc_metadata_tagger":
+            return "version_tagger"
+        if node_name == "doc_storer":
+            return "filesystem_writer"
+        if node_name == "doc_notifier":
+            return "index_updater"
+
         return options[0]
 
 

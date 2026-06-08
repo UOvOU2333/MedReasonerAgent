@@ -56,14 +56,13 @@ def latest_node_output(state: dict[str, Any], node_name: str) -> Any:
 
 
 def snapshot_state(state: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "query": state.get("query"),
-        "language": state.get("language", "zh"),
-        "entities": state.get("entities", []),
-        "subgraph": state.get("subgraph", {}),
-        "reasoning_paths": state.get("reasoning_paths", []),
-        "ranked_paths": state.get("ranked_paths", []),
-        "medical_report": state.get("medical_report", {}),
-        "treatment_plan": state.get("treatment_plan", {}),
-        "answer": state.get("answer", ""),
-    }
+    """Create a lightweight state snapshot, excluding large internal fields."""
+    snapshot: dict[str, Any] = {}
+    for key, value in state.items():
+        if key == "trace":
+            continue
+        if isinstance(value, (str, int, float, bool, list, dict)):
+            snapshot[key] = value
+        else:
+            snapshot[key] = str(value)
+    return snapshot

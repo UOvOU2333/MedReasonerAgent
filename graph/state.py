@@ -1,5 +1,6 @@
 from typing import Any, List, TypedDict
 
+# ── DRG 入组智能体状态 ──────────────────────────────────
 class DRGState(TypedDict):
     query: str
     language: str
@@ -12,7 +13,7 @@ class DRGState(TypedDict):
     reasoning_paths: List[Any]
     ranked_paths: List[Any]
 
-    # 🆕 医疗增强能力
+    # 医疗增强能力
     medical_report: dict
     treatment_plan: dict
 
@@ -20,4 +21,42 @@ class DRGState(TypedDict):
     plan: dict
 
     # 可视化关键
+    trace: List[dict]
+
+
+# ── 文档自动生成智能体状态 ──────────────────────────────
+class DocGenState(TypedDict):
+    query: str             # 用户指令，含文档类型（requirements / architecture / testing）
+    language: str          # zh / en
+    doc_type: str          # 目标文档类型：requirements / architecture / testing
+    project_name: str      # 项目名称
+
+    # 子智能体传递
+    code_analysis: dict    # code_scanner 输出：文件结构、模块清单等
+    context_data: dict     # context_collector 输出：项目背景、需求摘要
+    doc_draft: str         # doc_composer 输出：初稿 Markdown
+    doc_formatted: str     # doc_formatter 输出：格式化后 Markdown
+    doc_final: str         # doc_reviewer 审核通过后的最终文档
+    review_report: dict    # 审核报告：检查项通过/失败
+
+    answer: str            # 最终输出：文件保存路径 + 摘要
+    trace: List[dict]
+
+
+# ── 虚拟文档系统智能体状态 ──────────────────────────────
+class VDocState(TypedDict):
+    query: str             # 操作指令
+    language: str          # zh / en
+    doc_name: str          # 文档名称
+    doc_content: str       # 文档内容（由文档生成智能体传入）
+    doc_type: str          # requirements / architecture / testing
+
+    # 子智能体传递
+    validation_result: dict   # doc_validator 输出：格式检查结果
+    doc_metadata: dict        # metadata_tagger 输出：文档元数据
+    storage_path: str         # doc_storer 输出：实际保存路径
+    index_status: dict        # index_updater 输出：索引更新状态
+    notification: dict        # doc_notifier 输出：通知信息
+
+    answer: str            # 最终输出：保存确认信息
     trace: List[dict]

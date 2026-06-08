@@ -19,11 +19,26 @@ npm run lint   # ESLint
 
 MedReasonerAgent is a multi-agent biomedical knowledge graph reasoning system. It uses a **LangGraph state graph** to orchestrate a linear pipeline of agents, each mutating a shared `DRGState` TypedDict. The backend is FastAPI; the frontend is Next.js with `@xyflow/react` graph visualization and Zustand state management.
 
-### Agent pipeline (linear DAG)
+### Agent pipelines (linear DAGs)
 
+The system now supports three agent systems selected via `mode` parameter:
+
+**DRG 入组智能体** (`mode=drg`):
 ```
 supervisor → entity → medical_report → retrieval → reasoning → ranking → treatment_plan → explain
 ```
+
+**文档自动生成智能体** (`mode=docgen`):
+```
+doc_supervisor → code_scanner → context_collector → doc_composer → doc_formatter → doc_reviewer
+```
+Generates requirements, architecture, or testing documents following `docs/doc_spec.md` format specification. Supports `/docgen/generate` endpoint for combined generation+storage.
+
+**虚拟文档系统智能体** (`mode=vdoc`):
+```
+doc_receiver → doc_validator → doc_metadata_tagger → doc_storer → doc_notifier
+```
+Receives documents from other agents, validates format, tags metadata, and stores to `generated_docs/` directory with an `index.json` registry.
 
 Each agent is a plain function in `agents/` that takes and returns the shared `DRGState` dict. The graph is defined in `graph/workflow.py`; the state schema is in `graph/state.py`.
 
