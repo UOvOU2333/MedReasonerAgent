@@ -21,7 +21,7 @@ MedReasonerAgent is a multi-agent biomedical knowledge graph reasoning system. I
 
 ### Agent pipelines (linear DAGs)
 
-The system now supports three agent systems selected via `mode` parameter:
+The system now supports four agent systems selected via `mode` parameter:
 
 **DRG 入组智能体** (`mode=drg`):
 ```
@@ -33,6 +33,16 @@ supervisor → entity → medical_report → retrieval → reasoning → ranking
 doc_supervisor → code_scanner → context_collector → doc_composer → doc_formatter → doc_reviewer
 ```
 Generates requirements, architecture, or testing documents following `docs/doc_spec.md` format specification. Supports `/docgen/generate` endpoint for combined generation+storage.
+
+**测试用例生成智能体** (`mode=tcgen`):
+```
+tc_supervisor → drg_rule_extractor → medical_record_context → tc_composer → tc_formatter → tc_reviewer
+```
+Generates DRG test cases in three categories:
+- `normal` — valid diagnosis + procedure combinations (≥8 TC-N-XX cases)
+- `boundary` — comorbidities, age limits, gender differences (≥7 TC-B-XX cases)
+- `abnormal` — code errors, missing info, logic conflicts (≥7 TC-A-XX cases)
+Follows `docs/tc_spec.md` format specification. Uses DRG rules from `kg/drg_loader.py` and ICD reference data from `medical_record_context`. Supports `/tcgen/generate` endpoint for combined generation+storage.
 
 **虚拟文档系统智能体** (`mode=vdoc`):
 ```

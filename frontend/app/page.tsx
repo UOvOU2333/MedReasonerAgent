@@ -4,15 +4,17 @@ import { FormEvent, useRef, useState } from "react";
 import AgentGraph from "../components/AgentGraph";
 import ConversationPanel from "../components/ConversationPanel";
 import DocGenPanel from "../components/DocGenPanel";
+import TCGenPanel from "../components/TCGenPanel";
 import VDocPanel from "../components/VDocPanel";
 import { streamReasoning } from "../lib/websocket";
 import { useTraceStore } from "../store/traceStore";
 
-type Tab = "drg" | "docgen" | "vdoc";
+type Tab = "drg" | "docgen" | "tcgen" | "vdoc";
 
 const tabs: { key: Tab; label: { zh: string; en: string } }[] = [
   { key: "drg", label: { zh: "DRG 入组", en: "DRG Grouping" } },
   { key: "docgen", label: { zh: "文档生成", en: "Doc Generator" } },
+  { key: "tcgen", label: { zh: "测试用例生成", en: "Test Case Gen" } },
   { key: "vdoc", label: { zh: "虚拟文档", en: "Virtual Docs" } },
 ];
 
@@ -85,9 +87,13 @@ export default function Home() {
               ? language === "zh"
                 ? "文档生成"
                 : "Document Generation"
-              : language === "zh"
-                ? "文档存储系统"
-                : "Document Storage System"}
+              : activeTab === "tcgen"
+                ? language === "zh"
+                  ? "测试用例生成"
+                  : "Test Case Generation"
+                : language === "zh"
+                  ? "文档存储系统"
+                  : "Document Storage System"}
         </div>
       </header>
       <section className="workspace">
@@ -105,6 +111,8 @@ export default function Home() {
           </>
         ) : activeTab === "docgen" ? (
           <DocGenPanel />
+        ) : activeTab === "tcgen" ? (
+          <TCGenPanel />
         ) : (
           <VDocPanel />
         )}

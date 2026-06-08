@@ -1,12 +1,12 @@
 "use client";
 
-import { Bot, FileText, FileCode, ClipboardCheck, Download, Loader2, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
+import { Bot, FlaskConical, AlertTriangle, Bug, Download, Loader2, CheckCircle2, XCircle, AlertTriangle as AlertIcon } from "lucide-react";
 import { useState } from "react";
 import { useTraceStore } from "../store/traceStore";
 import { API_BASE } from "../lib/api";
 import MarkdownMessage from "./MarkdownMessage";
 
-type DocType = "requirements" | "architecture" | "testing";
+type TCType = "normal" | "boundary" | "abnormal";
 
 // 审核报告中每条检查的数据结构
 type ReviewCheck = {
@@ -24,40 +24,40 @@ type ReviewReport = {
   summary: string;
 };
 
-const docTypeInfo: Record<
-  DocType,
-  { label: string; icon: typeof FileText; description: string; color: string }
+const tcTypeInfo: Record<
+  TCType,
+  { label: string; icon: typeof FlaskConical; description: string; color: string }
 > = {
-  requirements: {
-    label: "需求分析文档",
-    icon: FileText,
+  normal: {
+    label: "正常场景测试用例",
+    icon: FlaskConical,
     description:
-      "生成完整的需求分析文档，含系统功能需求、用例分析、用户故事、非功能需求、数据需求、接口需求和约束假设。",
+      "生成正常场景测试用例，覆盖不同诊断+手术组合的 DRG 入组验证，含完整病历 JSON 和预期 DRG 分组。",
     color: "#167a72",
   },
-  architecture: {
-    label: "架构设计文档",
-    icon: FileCode,
+  boundary: {
+    label: "边界场景测试用例",
+    icon: AlertTriangle,
     description:
-      "生成完整的架构设计文档，含总体架构图、模块划分、数据流设计、组件通信、技术选型和部署架构。",
-    color: "#5b4e9c",
-  },
-  testing: {
-    label: "测试文档",
-    icon: ClipboardCheck,
-    description:
-      "生成完整的测试方案文档，含测试策略、单元/集成/系统/验收测试方案、测试环境和缺陷管理。",
+      "生成边界场景测试用例，覆盖合并症有无、年龄边界、多手术组合、性别差异等 DRG 分组边界条件。",
     color: "#c86f1d",
+  },
+  abnormal: {
+    label: "异常场景测试用例",
+    icon: Bug,
+    description:
+      "生成异常场景测试用例，覆盖 ICD 编码错误、信息缺失、逻辑冲突、格式错误等异常输入处理。",
+    color: "#dc2626",
   },
 };
 
-export default function DocGenPanel() {
-  const [selectedDocType, setSelectedDocType] = useState<DocType | null>(null);
+export default function TCGenPanel() {
+  const [selectedTCType, setSelectedTCType] = useState<TCType | null>(null);
   const [generating, setGenerating] = useState(false);
-  const [docResult, setDocResult] = useState<{
+  const [tcResult, setTCResult] = useState<{
     answer: string;
-    doc_final: string;
-    doc_type: string;
+    tc_final: string;
+    tc_type: string;
     storage_path: string;
     review_report: Record<string, unknown>;
   } | null>(null);
@@ -66,27 +66,27 @@ export default function DocGenPanel() {
   const language = useTraceStore((state) => state.language);
   const isZh = language === "zh";
 
-  async function generateDoc(docType: DocType) {
-    setSelectedDocType(docType);
+  async function generateTC(tcType: TCType) {
+    setSelectedTCType(tcType);
     setGenerating(true);
     setError(null);
-    setDocResult(null);
+    setTCResult(null);
 
-    const queryMap: Record<DocType, string> = {
-      requirements: isZh ? "生成需求分析文档" : "Generate requirements analysis document",
-      architecture: isZh ? "生成架构设计文档" : "Generate architecture design document",
-      testing: isZh ? "生成测试文档" : "Generate test plan document",
+    const queryMap: Record<TCType, string> = {
+      normal: isZh ? "生成正常场景测试用例" : "Generate normal scenario test cases",
+      boundary: isZh ? "生成边界场景测试用例" : "Generate boundary scenario test cases",
+      abnormal: isZh ? "生成异常场景测试用例" : "Generate abnormal scenario test cases",
     };
 
     try {
-      const response = await fetch(`${API_BASE}/docgen/generate`, {
+      const response = await fetch(`${API_BASE}/tcgen/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          query: queryMap[docType],
+          query: queryMap[tcType],
           language,
-          mode: "docgen",
-          doc_type: docType,
+          mode: "tcgen",
+          tc_type: tcType,
           project_name: "MedReasonerAgent",
         }),
       });
@@ -95,7 +95,7 @@ export default function DocGenPanel() {
         throw new Error(`Generate failed: ${response.status}`);
       }
       const data = await response.json();
-      setDocResult(data);
+      setTCResult(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -103,48 +103,55 @@ export default function DocGenPanel() {
     }
   }
 
-  function downloadDoc() {
-    if (!docResult?.doc_final) return;
-    const blob = new Blob([docResult.doc_final], { type: "text/markdown" });
+  function downloadTC() {
+    if (!tcResult?.tc_final) return;
+    const blob = new Blob([tcResult.tc_final], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    const docType = docResult.doc_type || "requirements";
+    const tcType = tcResult.tc_type || "normal";
+    const tcTypeToFile: Record<string, string> = {
+      normal: "tc_normal",
+      boundary: "tc_boundary",
+      abnormal: "tc_abnormal",
+    };
     a.href = url;
-    a.download = `MedReasonerAgent_${docType}_V1.0.md`;
+    a.download = `MedReasonerAgent_${tcTypeToFile[tcType] || tcType}_V1.0.md`;
     a.click();
     URL.revokeObjectURL(url);
   }
 
-  const reviewPassed = docResult?.review_report
-    ? (docResult.review_report as Record<string, unknown>).passed === true
+  const reviewPassed = tcResult?.review_report
+    ? (tcResult.review_report as Record<string, unknown>).passed === true
     : false;
 
   return (
-    <section className="docgen-panel">
-      <div className="docgen-header">
+    <section className="tcgen-panel">
+      <div className="tcgen-header">
         <Bot size={20} />
         <div>
-          <strong>{isZh ? "文档自动生成智能体" : "Document Generation Agent"}</strong>
-          <span className="docgen-subtitle">
-            {isZh ? "选择文档类型，智能体将自动分析项目并生成符合规范的文档" : "Select document type to auto-generate specification-compliant documentation"}
+          <strong>{isZh ? "测试用例生成智能体" : "Test Case Generation Agent"}</strong>
+          <span className="tcgen-subtitle">
+            {isZh
+              ? "基于 DRG 分组规则和病历模板，自动生成正常、边界、异常三类测试用例"
+              : "Auto-generate normal, boundary, and abnormal DRG test cases based on grouping rules and medical record templates"}
           </span>
         </div>
       </div>
 
-      <div className="docgen-cards">
-        {(Object.keys(docTypeInfo) as DocType[]).map((docType) => {
-          const info = docTypeInfo[docType];
+      <div className="tcgen-cards">
+        {(Object.keys(tcTypeInfo) as TCType[]).map((tcType) => {
+          const info = tcTypeInfo[tcType];
           const Icon = info.icon;
-          const isActive = selectedDocType === docType;
+          const isActive = selectedTCType === tcType;
           return (
             <button
-              key={docType}
-              className={`docgen-card ${isActive ? "active" : ""}`}
-              onClick={() => generateDoc(docType)}
+              key={tcType}
+              className={`tcgen-card ${isActive ? "active" : ""}`}
+              onClick={() => generateTC(tcType)}
               disabled={generating}
               style={{ borderColor: isActive ? info.color : undefined }}
             >
-              <div className="docgen-card-icon" style={{ background: info.color }}>
+              <div className="tcgen-card-icon" style={{ background: info.color }}>
                 {generating && isActive ? <Loader2 size={28} className="spin" /> : <Icon size={28} />}
               </div>
               <strong>{info.label}</strong>
@@ -157,47 +164,47 @@ export default function DocGenPanel() {
         })}
       </div>
 
-      {error ? <div className="docgen-error">❌ {error}</div> : null}
+      {error ? <div className="tcgen-error">❌ {error}</div> : null}
 
-      {docResult ? (
-        <div className="docgen-result">
+      {tcResult ? (
+        <div className="tcgen-result">
           <div className="result-header">
             <span>
-              {isZh ? "生成完成" : "Generation Complete"} — {docTypeInfo[docResult.doc_type as DocType]?.label ?? docResult.doc_type}
+              {isZh ? "生成完成" : "Generation Complete"} — {tcTypeInfo[tcResult.tc_type as TCType]?.label ?? tcResult.tc_type}
               {" "}
               {reviewPassed
                 ? isZh ? "✅ 审核通过" : "✅ Review Passed"
                 : isZh ? "⚠️ 审核未完全通过" : "⚠️ Review Incomplete"}
             </span>
-            <button className="download-btn" onClick={downloadDoc} title={isZh ? "下载文档" : "Download document"}>
+            <button className="download-btn" onClick={downloadTC} title={isZh ? "下载测试用例" : "Download test cases"}>
               <Download size={16} /> {isZh ? "下载 .md" : "Download .md"}
             </button>
           </div>
 
-          {docResult.storage_path ? (
+          {tcResult.storage_path ? (
             <div className="storage-info">
-              {isZh ? "已保存至" : "Saved to"}: <code>{docResult.storage_path}</code>
+              {isZh ? "已保存至" : "Saved to"}: <code>{tcResult.storage_path}</code>
             </div>
           ) : null}
 
-          {docResult.review_report ? (
+          {tcResult.review_report ? (
             <ReviewCard
-              report={docResult.review_report as ReviewReport}
+              report={tcResult.review_report as ReviewReport}
               isZh={isZh}
             />
           ) : null}
 
-          <div className="doc-preview">
-            <h3>{isZh ? "文档预览" : "Document Preview"}</h3>
-            <div className="doc-preview-content">
-              <MarkdownMessage content={docResult.doc_final.slice(0, 5000) + (docResult.doc_final.length > 5000 ? "\n\n*(预览截断，下载完整文档)*" : "")} />
+          <div className="tc-preview">
+            <h3>{isZh ? "测试用例预览" : "Test Case Preview"}</h3>
+            <div className="tc-preview-content">
+              <MarkdownMessage content={tcResult.tc_final.slice(0, 5000) + (tcResult.tc_final.length > 5000 ? "\n\n*(预览截断，下载完整文档)*" : "")} />
             </div>
           </div>
         </div>
       ) : null}
 
       <style jsx>{`
-        .docgen-panel {
+        .tcgen-panel {
           min-height: 0;
           overflow: auto;
           padding: 22px;
@@ -205,29 +212,29 @@ export default function DocGenPanel() {
           align-content: start;
           gap: 20px;
         }
-        .docgen-header {
+        .tcgen-header {
           display: flex;
           align-items: flex-start;
           gap: 12px;
           padding-bottom: 16px;
           border-bottom: 1px solid var(--border);
         }
-        .docgen-header strong {
+        .tcgen-header strong {
           display: block;
           font-size: 18px;
           margin-bottom: 4px;
         }
-        .docgen-subtitle {
+        .tcgen-subtitle {
           color: var(--muted);
           font-size: 13px;
           line-height: 1.5;
         }
-        .docgen-cards {
+        .tcgen-cards {
           display: grid;
           grid-template-columns: repeat(3, 1fr);
           gap: 14px;
         }
-        .docgen-card {
+        .tcgen-card {
           display: grid;
           gap: 10px;
           justify-items: center;
@@ -239,18 +246,18 @@ export default function DocGenPanel() {
           cursor: pointer;
           transition: border-color 0.2s, box-shadow 0.2s;
         }
-        .docgen-card:hover:not(:disabled) {
+        .tcgen-card:hover:not(:disabled) {
           box-shadow: 0 4px 16px rgba(23, 32, 42, 0.08);
           border-color: #aaa;
         }
-        .docgen-card.active {
+        .tcgen-card.active {
           box-shadow: 0 4px 20px rgba(23, 32, 42, 0.1);
         }
-        .docgen-card:disabled {
+        .tcgen-card:disabled {
           opacity: 0.7;
           cursor: not-allowed;
         }
-        .docgen-card-icon {
+        .tcgen-card-icon {
           width: 52px;
           height: 52px;
           display: grid;
@@ -258,11 +265,11 @@ export default function DocGenPanel() {
           border-radius: 12px;
           color: #fff;
         }
-        .docgen-card strong {
+        .tcgen-card strong {
           font-size: 15px;
           color: var(--text);
         }
-        .docgen-card p {
+        .tcgen-card p {
           margin: 0;
           font-size: 12px;
           line-height: 1.5;
@@ -279,7 +286,7 @@ export default function DocGenPanel() {
         @keyframes spin {
           to { transform: rotate(360deg); }
         }
-        .docgen-error {
+        .tcgen-error {
           background: #fef2f2;
           border: 1px solid #fca5a5;
           border-radius: 8px;
@@ -287,7 +294,7 @@ export default function DocGenPanel() {
           color: #dc2626;
           font-size: 13px;
         }
-        .docgen-result {
+        .tcgen-result {
           display: grid;
           gap: 14px;
         }
@@ -397,14 +404,14 @@ export default function DocGenPanel() {
           color: #dc2626;
           font-weight: 600;
         }
-        .doc-preview {
+        .tc-preview {
           border: 1px solid var(--border);
           border-radius: 8px;
           background: var(--panel);
           max-height: 520px;
           overflow: auto;
         }
-        .doc-preview h3 {
+        .tc-preview h3 {
           margin: 0;
           padding: 10px 14px;
           font-size: 13px;
@@ -413,7 +420,7 @@ export default function DocGenPanel() {
           top: 0;
           background: var(--panel);
         }
-        .doc-preview-content {
+        .tc-preview-content {
           padding: 14px;
         }
       `}</style>
@@ -422,10 +429,9 @@ export default function DocGenPanel() {
 }
 
 
-// ── 审核报告卡片（直接可见，逐项展示通过/失败） ──
+// ── 审核报告卡片 ──
 
 function ReviewCard({ report, isZh }: { report: ReviewReport; isZh: boolean }) {
-  // 失败项排前面
   const sorted = [...report.checks].sort((a, b) => (a.passed === b.passed ? 0 : a.passed ? 1 : -1));
   const failCount = report.total_count - report.passed_count;
 
@@ -436,7 +442,7 @@ function ReviewCard({ report, isZh }: { report: ReviewReport; isZh: boolean }) {
           {report.passed ? (
             <CheckCircle2 size={18} color="#1f8a4c" />
           ) : (
-            <AlertTriangle size={18} color="#dc2626" />
+            <AlertIcon size={18} color="#dc2626" />
           )}
           <span>
             {report.passed

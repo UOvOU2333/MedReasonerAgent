@@ -43,13 +43,32 @@ class DocGenState(TypedDict):
     trace: List[dict]
 
 
+# ── 测试用例生成智能体状态 ──────────────────────────────
+class TCGenState(TypedDict):
+    query: str             # 用户指令，含测试类型 (normal / boundary / abnormal)
+    language: str          # zh / en
+    tc_type: str           # 目标测试类型：normal / boundary / abnormal
+    project_name: str      # 项目名称
+
+    # 子智能体传递
+    drg_rules: dict        # drg_rule_extractor 输出：DRG 分组规则
+    medical_records: dict  # medical_record_context 输出：病历样本
+    tc_draft: str          # tc_composer 输出：初稿 Markdown
+    tc_formatted: str      # tc_formatter 输出：格式化后 Markdown
+    tc_final: str          # tc_reviewer 审核通过后的最终文档
+    review_report: dict    # 审核报告：检查项通过/失败
+
+    answer: str            # 最终输出：文件保存路径 + 摘要
+    trace: List[dict]
+
+
 # ── 虚拟文档系统智能体状态 ──────────────────────────────
 class VDocState(TypedDict):
     query: str             # 操作指令
     language: str          # zh / en
     doc_name: str          # 文档名称
     doc_content: str       # 文档内容（由文档生成智能体传入）
-    doc_type: str          # requirements / architecture / testing
+    doc_type: str          # requirements / architecture / testing / tc_normal / tc_boundary / tc_abnormal
 
     # 子智能体传递
     validation_result: dict   # doc_validator 输出：格式检查结果

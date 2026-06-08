@@ -1,5 +1,5 @@
 from langgraph.graph import StateGraph
-from graph.state import DRGState, DocGenState, VDocState
+from graph.state import DRGState, DocGenState, TCGenState, VDocState
 from runtime.event_bus import event_bus
 from runtime.executor import Executor
 
@@ -20,6 +20,14 @@ from agents.context_collector import context_collector_agent
 from agents.doc_composer import doc_composer_agent
 from agents.doc_formatter import doc_formatter_agent
 from agents.doc_reviewer import doc_reviewer_agent
+
+# ── 测试用例生成智能体 ──
+from agents.tc_supervisor import tc_supervisor_agent
+from agents.drg_rule_extractor import drg_rule_extractor_agent
+from agents.medical_record_context import medical_record_context_agent
+from agents.tc_composer import tc_composer_agent
+from agents.tc_formatter import tc_formatter_agent
+from agents.tc_reviewer import tc_reviewer_agent
 
 # ── 虚拟文档系统智能体 ──
 from agents.doc_receiver import doc_receiver_agent
@@ -97,6 +105,38 @@ def build_docgen_graph():
     graph.add_edge("doc_formatter", "doc_reviewer")
 
     graph.set_finish_point("doc_reviewer")
+
+    return graph.compile()
+
+
+# ═══════════════════════════════════════════════════════════
+#  测试用例生成智能体工作流
+# ═══════════════════════════════════════════════════════════
+def build_tcgen_graph():
+
+    graph = StateGraph(TCGenState)
+    executor = Executor(event_bus)
+
+    def node(name, fn):
+        return lambda state: executor.run_node(name, fn, state)
+
+    graph.add_node("tc_supervisor", node("tc_supervisor", tc_supervisor_agent))
+    graph.add_node("drg_rule_extractor", node("drg_rule_extractor", drg_rule_extractor_agent))
+    graph.add_node("medical_record_context", node("medical_record_context", medical_record_context_agent))
+    graph.add_node("tc_composer", node("tc_composer", tc_composer_agent))
+    graph.add_node("tc_formatter", node("tc_formatter", tc_formatter_agent))
+    graph.add_node("tc_reviewer", node("tc_reviewer", tc_reviewer_agent))
+
+    graph.set_entry_point("tc_supervisor")
+
+    # 线性流水线：分类 → 提取DRG规则 → 加载病历模板 → 组稿 → 格式化 → 审核
+    graph.add_edge("tc_supervisor", "drg_rule_extractor")
+    graph.add_edge("drg_rule_extractor", "medical_record_context")
+    graph.add_edge("medical_record_context", "tc_composer")
+    graph.add_edge("tc_composer", "tc_formatter")
+    graph.add_edge("tc_formatter", "tc_reviewer")
+
+    graph.set_finish_point("tc_reviewer")
 
     return graph.compile()
 
