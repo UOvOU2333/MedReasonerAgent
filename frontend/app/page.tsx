@@ -4,6 +4,7 @@ import { FormEvent, useRef, useState } from "react";
 import AgentGraph from "../components/AgentGraph";
 import ConversationPanel from "../components/ConversationPanel";
 import DocGenPanel from "../components/DocGenPanel";
+import DRGResultCard from "../components/DRGResultCard";
 import TCGenPanel from "../components/TCGenPanel";
 import VDocPanel from "../components/VDocPanel";
 import { streamReasoning } from "../lib/websocket";
@@ -42,6 +43,16 @@ export default function Home() {
     if (!query.trim()) {
       return;
     }
+    // 诊断日志：确认浏览器发送的 query 是什么
+    const isJsonLike = query.trim().startsWith("{") || query.trim().startsWith('"性别"');
+    console.log("[SUBMIT DEBUG]", {
+      length: query.length,
+      firstChar: query.trim().charCodeAt(0),
+      startsWithBrace: query.trim().startsWith("{"),
+      isJsonLike,
+      hasNewlines: query.includes("\n"),
+      preview: query.substring(0, 80),
+    });
     stopRef.current?.();
     startRun(query, language);
     setRunning(true);
@@ -50,7 +61,19 @@ export default function Home() {
       language,
       (traceEvent) => {
         addEvent(traceEvent);
-        if (traceEvent.event === "complete" || traceEvent.event === "error") {
+        if (traceEvent.event === "complete") {
+          const st = traceEvent.state as Record<string, unknown> | undefined;
+          const drg = st?.drg_result as Record<string, unknown> | undefined;
+          console.log("[DRG DEBUG] complete event:", {
+            hasState: !!st,
+            hasDrgResult: !!drg,
+            drgCode: drg?.drg ?? "N/A",
+            answerType: (traceEvent.answer as string)?.includes("DRG 入组结果") ? "TABLE" : "LLM",
+            answerLen: (traceEvent.answer as string)?.length ?? 0,
+          });
+          setRunning(false);
+        }
+        if (traceEvent.event === "error") {
           setRunning(false);
         }
       },
@@ -107,7 +130,10 @@ export default function Home() {
               onLanguageChange={setLanguage}
               onSubmit={submit}
             />
-            <AgentGraph />
+            <aside className="right-panel">
+              <AgentGraph />
+              <DRGResultCard />
+            </aside>
           </>
         ) : activeTab === "docgen" ? (
           <DocGenPanel />

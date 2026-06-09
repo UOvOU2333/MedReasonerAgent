@@ -5,7 +5,7 @@ class DRGState(TypedDict):
     query: str
     language: str
 
-    # core KG
+    # core KG — 旧管线兼容
     entities: List[str]
     subgraph: dict[str, Any]
 
@@ -16,6 +16,10 @@ class DRGState(TypedDict):
     # 医疗增强能力
     medical_report: dict
     treatment_plan: dict
+
+    # ── 新增：结构化 EMR + DRG 入组结果 ──
+    emr_data: dict              # entity 解析的结构化电子病历
+    drg_result: dict            # retrieval → reasoning 最终入组结果
 
     answer: str
     plan: dict

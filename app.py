@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -50,6 +53,8 @@ def drg_initial_state(query: str, language: str = "zh") -> dict[str, Any]:
         "ranked_paths": [],
         "medical_report": {},
         "treatment_plan": {},
+        "emr_data": {},
+        "drg_result": {},
         "answer": "",
         "plan": {},
         "trace": [],
@@ -158,6 +163,47 @@ def select_initial_state(mode: str, request: RunRequest) -> dict[str, Any]:
 #  API Endpoints
 # ═══════════════════════════════════════════════════
 
+# ── 辅助：保存 DRG 入组结果 ──
+def _save_drg_result(query: str, drg_graph_result: dict) -> dict:
+    """将 DRG 入组结果封装为 JSON 并保存到 results/ 目录。
+    返回 {"saved": bool, "path": str, "result": dict}
+    """
+    results_dir = os.path.join(os.path.dirname(__file__), "results")
+    os.makedirs(results_dir, exist_ok=True)
+
+    # 解析原始输入
+    emr_input = {}
+    try:
+        emr_input = json.loads(query)
+    except (json.JSONDecodeError, TypeError):
+        return {"saved": False, "path": "", "result": {}}
+
+    if not isinstance(emr_input, dict) or "主要诊断" not in emr_input:
+        return {"saved": False, "path": "", "result": {}}
+
+    drg_result = drg_graph_result.get("drg_result", {})
+
+    # 按老师格式构建输出
+    output = dict(emr_input)
+    output["result"] = {
+        "mdc": drg_result.get("mdc", ""),
+        "adrg": drg_result.get("adrg", ""),
+        "drg": drg_result.get("drg", ""),
+        "complication": drg_result.get("complication", ""),
+        "confidence": drg_result.get("confidence", 0),
+        "reason": drg_result.get("reasoning_steps", []),
+    }
+
+    # 写入 timestamp 文件
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{drg_result.get('drg', 'UNKNOWN')}_{timestamp}.json"
+    filepath = os.path.join(results_dir, filename)
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+
+    return {"saved": True, "path": f"results/{filename}", "result": output}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -179,6 +225,10 @@ def run(request: RunRequest):
     if mode == "drg":
         base["medical_report"] = result.get("medical_report", {})
         base["treatment_plan"] = result.get("treatment_plan", {})
+        base["drg_result"] = result.get("drg_result", {})
+        base["emr_data"] = result.get("emr_data", {})
+        save_info = _save_drg_result(request.query, result)
+        base["save_info"] = save_info
     elif mode == "docgen":
         base["doc_final"] = result.get("doc_final", "")
         base["doc_type"] = result.get("doc_type", "")
@@ -239,6 +289,11 @@ async def websocket_run(websocket: WebSocket):
         while True:
             if task.done() and queue.empty():
                 result = task.result()
+                # DRG 模式自动保存入组结果
+                save_info = {}
+                if mode == "drg":
+                    save_info = _save_drg_result(query, result)
+                    result["save_info"] = save_info
                 await websocket.send_json(
                     {
                         "event": "complete",
@@ -247,6 +302,7 @@ async def websocket_run(websocket: WebSocket):
                         "state": result,
                         "answer": result.get("answer", ""),
                         "trace": result.get("trace", []),
+                        "save_info": save_info,
                     }
                 )
                 break

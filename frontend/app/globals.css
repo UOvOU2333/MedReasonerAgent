@@ -61,6 +61,15 @@ textarea {
   height: calc(100vh - 61px);
 }
 
+.right-panel {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-left: 1px solid var(--border);
+}
+
 /* DocGen/TCGen/VDoc tabs use single-column layout */
 .workspace:has(.docgen-panel),
 .workspace:has(.tcgen-panel),
