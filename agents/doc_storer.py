@@ -47,7 +47,11 @@ def doc_storer_agent(state):
     _update_index(index, doc_name, doc_type, version, filename)
     _save_index(index)
 
-    storage_path = os.path.relpath(filepath, _PROJECT_ROOT)
+    try:
+        storage_path = os.path.relpath(filepath, _PROJECT_ROOT)
+    except ValueError:
+        # Windows: filepath and _PROJECT_ROOT may be on different drives
+        storage_path = filepath
 
     state["storage_path"] = storage_path
     append_trace(state, "doc_storer", f"Stored: {storage_path} ({len(doc_content)} chars)")

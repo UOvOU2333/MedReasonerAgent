@@ -421,3 +421,155 @@ def list_documents():
             index = json.load(f)
         return {"documents": index.get("documents", []), "last_updated": index.get("last_updated", "")}
     return {"documents": [], "last_updated": ""}
+
+
+# ── 测试执行端点 ──
+@app.get("/testing/run")
+def testing_run():
+    """
+    运行 pytest，收集测试结果，立即返回（不调用 LLM）。
+    """
+    from tools.test_reporter import run_pytest
+
+    test_data = run_pytest()
+    return {
+        "report_date": test_data["report_date"],
+        "total": test_data["total"],
+        "passed": test_data["passed"],
+        "failed": test_data["failed"],
+        "skipped": test_data["skipped"],
+        "error": test_data["error"],
+        "xfailed": test_data.get("xfailed", 0),
+        "xpassed": test_data.get("xpassed", 0),
+        "pass_rate": test_data["pass_rate"],
+        "exit_code": test_data["exit_code"],
+        "by_file": test_data["by_file"],
+        "failed_tests": test_data["failed_tests"],
+    }
+
+
+class ReportRequest(BaseModel):
+    report_date: str = ""
+    total: int = 0
+    passed: int = 0
+    failed: int = 0
+    skipped: int = 0
+    error: int = 0
+    xfailed: int = 0
+    xpassed: int = 0
+    pass_rate: float = 0.0
+    exit_code: int = 0
+
+
+# ── 测试报告生成端点 ──
+@app.post("/testing/report")
+def testing_report(request: ReportRequest | None = None, language: str = "zh"):
+    """
+    根据传入的测试数据调用大模型生成测试报告。
+    若 request 为空则先运行 pytest。
+    """
+    from tools.test_reporter import build_test_report_prompt, run_pytest
+    from tools.llm import call_llm
+
+    if request is not None:
+        test_data = request.model_dump()
+    else:
+        test_data = run_pytest()
+
+    prompt = build_test_report_prompt(test_data, language=language)
+    report_content = call_llm(prompt, metadata={"agent_system": "docgen", "doc_type": "testing"})
+
+    return {"report": report_content}
+
+
+# ── 测试文档统一生成（pytest 方案 + 执行数据 + LLM 报告） ──
+@app.post("/testing/generate-doc")
+def testing_generate_doc(language: str = "zh"):
+    """
+    统一流程：
+    1. 运行 pytest 获取实时执行数据
+    2. 调用大模型生成测试方案文档（复用 docgen pipeline）
+    3. 调用大模型基于执行数据生成测试执行报告
+    4. 合并为一个完整文档返回
+    """
+    from tools.test_reporter import (
+        run_pytest,
+        build_test_report_prompt,
+        build_testing_doc_content,
+    )
+    from tools.llm import call_llm
+
+    # Step 1: run pytest
+    test_data = run_pytest()
+
+    # Step 2: generate static test plan via docgen pipeline
+    is_zh = language == "zh"
+    plan_prompt = _build_testing_plan_prompt(language)
+    test_plan = call_llm(plan_prompt, metadata={"agent_system": "docgen", "doc_type": "testing"})
+
+    # Step 3: generate LLM execution report from pytest data
+    report_prompt = build_test_report_prompt(test_data, language=language)
+    llm_report = call_llm(report_prompt, metadata={"agent_system": "docgen", "doc_type": "testing"})
+
+    # Step 4: merge
+    doc_final = build_testing_doc_content(test_plan, test_data, llm_report)
+
+    return {
+        "doc_final": doc_final,
+        "doc_type": "testing",
+        "storage_path": "",
+        "test_data": test_data,
+    }
+
+
+def _build_testing_plan_prompt(language: str) -> str:
+    """Build a minimal prompt for the static test plan section."""
+    from tools.test_reporter import REPORT_DATE
+
+    is_zh = language == "zh"
+    if is_zh:
+        return f"""你是一名 QA 工程师。请为 MedReasonerAgent 项目生成一份完整的测试方案文档。
+
+项目：MedReasonerAgent
+生成日期：{REPORT_DATE}
+语言：中文
+
+文档必须严格包含以下章节（复制标题时保持完全一致，包括 "##" 前缀和编号）：
+
+## 1. 测试策略
+## 2. 单元测试方案
+## 3. 集成测试方案
+## 4. 系统测试方案
+## 5. 验收测试方案
+## 6. 测试环境
+## 7. 缺陷管理
+
+要求：
+- 使用 Markdown 表格
+- 包含属性表：| 属性 | 内容 | 列：项目名称(MedReasonerAgent)、文档类型(测试文档)、文档版本(V1.0)、生成日期({REPORT_DATE})、生成方式(AI 自动生成)、状态(草稿)
+- 不得包含任何 TODO、TBD、待定等占位文本
+- 文档末尾须包含：*本文档由 DocGen Agent 自动生成，状态为草稿，需人工审核确认。*
+"""
+    else:
+        return f"""You are a QA engineer. Generate a complete test plan document for MedReasonerAgent.
+
+Project: MedReasonerAgent
+Generated date: {REPORT_DATE}
+Language: English
+
+Use these EXACT section headings:
+
+## 1. 测试策略
+## 2. 单元测试方案
+## 3. 集成测试方案
+## 4. 系统测试方案
+## 5. 验收测试方案
+## 6. 测试环境
+## 7. 缺陷管理
+
+Requirements:
+- Use Markdown tables
+- Include meta table: | 属性 | 内容 | with 项目名称(MedReasonerAgent), 文档类型(测试文档), 文档版本(V1.0), 生成日期({REPORT_DATE}), 生成方式(AI 自动生成), 状态(草稿)
+- NO TODO, TBD or placeholder text
+- End with: *本文档由 DocGen Agent 自动生成，状态为草稿，需人工审核确认。*
+"""

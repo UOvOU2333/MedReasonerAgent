@@ -7,6 +7,7 @@ def tc_formatter_agent(state):
     - 确保 Markdown 表格对齐
     - 确保章节编号连续
     - 添加文档元信息表（如果缺失）
+    - 确保三级子标题存在（### 1.1 / 1.2 / 1.3 等）
     - 移除可能的占位符
     这是确定性格式化步骤，不依赖 LLM。
     """
@@ -25,7 +26,6 @@ def tc_formatter_agent(state):
     # 1. 确保文档元信息表存在
     if "| **项目名称**" not in draft and "| **Project Name**" not in draft:
         header = _build_meta_table(project_name, tc_type_names.get(tc_type, tc_type), tc_type)
-        # 插入到主标题之后
         lines = formatted.split("\n")
         for i, line in enumerate(lines):
             if line.startswith("# ") and i + 1 < len(lines):
@@ -74,9 +74,152 @@ def tc_formatter_agent(state):
             result.append(line)
     formatted = "\n".join(result)
 
+    # 6. 对齐 tc_spec.md：确保二级章节下的三级子标题存在
+    # 正常场景：## 1 下必须有 ### 1.1 / 1.2 / 1.3
+    # 边界场景：## 1 下必须有 ### 1.1 / 1.2
+    # 异常场景：## 1 下必须有 ### 1.1 / 1.2
+    formatted = _ensure_subsections(formatted, tc_type)
+
     state["tc_formatted"] = formatted
     append_trace(state, "tc_formatter", f"Formatted test cases ({len(formatted)} chars)")
     return state
+
+
+def _ensure_subsections(doc: str, tc_type: str) -> str:
+    """确保各二级章节下存在三级子标题。"""
+    lines = doc.split("\n")
+    section_stack = []  # 当前嵌套的二级章节行号
+    output = []
+    i = 0
+
+    # 预定义各类型二级章节下的子标题
+    subsection_map = {
+        "normal": {
+            "## 1. 测试概述": ["### 1.1 测试目标", "### 1.2 测试范围", "### 1.3 参考资料"],
+            "## 2. DRG 分组规则摘要": ["### 2.1 知识图谱关系", "### 2.2 入组判定逻辑"],
+        },
+        "boundary": {
+            "## 1. 测试概述": ["### 1.1 测试目标", "### 1.2 边界定义"],
+            "## 2. 边界条件分析": ["### 2.1 合并症影响分析", "### 2.2 年龄边界分析", "### 2.3 多手术组合影响"],
+        },
+        "abnormal": {
+            "## 1. 测试概述": ["### 1.1 测试目标", "### 1.2 异常分类"],
+            "## 2. 异常条件分析": ["### 2.1 编码错误类型", "### 2.2 信息缺失类型", "### 2.3 逻辑冲突类型"],
+        },
+    }
+
+    subsections = subsection_map.get(tc_type, subsection_map["normal"])
+
+    in_section = False
+    current_h2 = None
+    h3_found = set()
+    pending_subsections = []
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+
+        # 遇到二级标题
+        if stripped.startswith("## ") and not stripped.startswith("### "):
+            # 先补全上一个二级章节的子标题（如果缺少）
+            if current_h2 and pending_subsections and not h3_found:
+                for sub in pending_subsections:
+                    if sub not in doc:
+                        output.append("")
+                        output.append(sub)
+                        output.append("")
+                pending_subsections = []
+                h3_found = set()
+
+            # 检测下一章节
+            core = _strip_heading(stripped)
+            current_h2 = stripped
+            in_section = True
+            h3_found = set()
+            pending_subsections = subsections.get(stripped, [])
+
+        # 遇到三级标题
+        elif stripped.startswith("### ") and in_section:
+            h3_found.add(stripped)
+            # 如果 LLM 生成了不规范的子标题，规范化它
+            canonical = _canonical_h3(stripped, current_h2)
+            if canonical and canonical != stripped:
+                stripped = canonical
+            # 消耗掉匹配的 pending 子标题
+            for ps in pending_subsections[:]:
+                if _h3_matches(ps, stripped):
+                    pending_subsections.remove(ps)
+                    break
+
+        output.append(line)
+        i += 1
+
+    # 处理最后一节
+    if current_h2 and pending_subsections and not h3_found:
+        for sub in pending_subsections:
+            if sub not in doc:
+                output.append("")
+                output.append(sub)
+                output.append("")
+
+    return "\n".join(output)
+
+
+def _strip_heading(heading: str) -> str:
+    """去掉编号前缀，还原章节核心名称。"""
+    import re
+    heading = heading.strip()
+    # 去掉 ##  前缀和编号（如 "1."、"一、"）
+    m = re.match(r'^##\s*(?:\d+[\.、\s]+|[一二三四五六七八九十]+[、\s]+)?(.*)', heading)
+    if m:
+        return m.group(1).strip()
+    return heading
+
+
+def _h3_matches(canonical: str, actual: str) -> bool:
+    """判断实际三级标题是否与规范化标题匹配（允许模糊匹配）。"""
+    if actual == canonical:
+        return True
+    # 去掉 ### 编号后比较核心内容
+    import re
+    c_core = re.sub(r'^###\s*(?:\d+[\.、\s]+)?', '', canonical).strip()
+    a_core = re.sub(r'^###\s*(?:\d+[\.、\s]+)?', '', actual).strip()
+    return c_core == a_core
+
+
+def _canonical_h3(actual: str, parent_h2: str) -> str | None:
+    """将实际三级标题规范化为 tc_spec.md 要求的格式。"""
+    import re
+    core = re.sub(r'^###\s*(?:\d+[\.、\s]+)?', '', actual).strip()
+    h2_core = re.sub(r'^##\s*(?:\d+[\.、\s]+)?', '', parent_h2).strip()
+
+    if h2_core == "测试概述":
+        if "目标" in core:
+            return "### 1.1 测试目标"
+        if "范围" in core or "边界" in core:
+            return "### 1.2 测试范围"
+        if "参考" in core:
+            return "### 1.3 参考资料"
+    elif h2_core == "DRG 分组规则摘要":
+        if "知识" in core or "图谱" in core:
+            return "### 2.1 知识图谱关系"
+        if "入组" in core or "判定" in core or "逻辑" in core:
+            return "### 2.2 入组判定逻辑"
+    elif h2_core == "边界条件分析":
+        if "合并" in core or "CC" in core or "MCC" in core:
+            return "### 2.1 合并症影响分析"
+        if "年龄" in core:
+            return "### 2.2 年龄边界分析"
+        if "多手术" in core or "手术组合" in core:
+            return "### 2.3 多手术组合影响"
+    elif h2_core == "异常条件分析":
+        if "编码" in core:
+            return "### 2.1 编码错误类型"
+        if "信息" in core or "缺失" in core:
+            return "### 2.2 信息缺失类型"
+        if "逻辑" in core or "冲突" in core:
+            return "### 2.3 逻辑冲突类型"
+
+    return None
 
 
 def _build_meta_table(project_name: str, type_name: str, tc_type: str) -> str:
@@ -89,5 +232,5 @@ def _build_meta_table(project_name: str, type_name: str, tc_type: str) -> str:
 | **生成日期** | {date.today().isoformat()} |
 | **生成方式** | AI 自动生成（TCGen Agent） |
 | **状态** | 草稿 |
-| **DRG 版本** | 基于项目内置 DRG 知识图谱 |
+| **DRG 版本** | CN-DRG 2018（基于项目内置 MDC/ADRG/CC 查表） |
 """

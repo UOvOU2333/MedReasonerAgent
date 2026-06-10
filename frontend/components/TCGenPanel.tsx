@@ -8,12 +8,11 @@ import MarkdownMessage from "./MarkdownMessage";
 
 type TCType = "normal" | "boundary" | "abnormal";
 
-// 审核报告中每条检查的数据结构
 type ReviewCheck = {
-  check: string;   // CHK-01, CHK-02, ...
-  item: string;    // 检查项名称
+  check: string;
+  item: string;
   passed: boolean;
-  detail: string;  // 通过/失败详情
+  detail: string;
 };
 
 type ReviewReport = {
@@ -52,25 +51,25 @@ const tcTypeInfo: Record<
 };
 
 export default function TCGenPanel() {
+  // Read state from Zustand store (persists across tab switches)
+  const tcgenResult = useTraceStore((state) => state.tcgenResult);
+  const tcgenError = useTraceStore((state) => state.tcgenError);
+  const tcgenGenerating = useTraceStore((state) => state.tcgenGenerating);
+  const setTCGenResult = useTraceStore((state) => state.setTCGenResult);
+  const setTCGenError = useTraceStore((state) => state.setTCGenError);
+  const setTCGenGenerating = useTraceStore((state) => state.setTCGenGenerating);
+
+  // Local state only for which card is active (ephemeral UI state)
   const [selectedTCType, setSelectedTCType] = useState<TCType | null>(null);
-  const [generating, setGenerating] = useState(false);
-  const [tcResult, setTCResult] = useState<{
-    answer: string;
-    tc_final: string;
-    tc_type: string;
-    storage_path: string;
-    review_report: Record<string, unknown>;
-  } | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const language = useTraceStore((state) => state.language);
   const isZh = language === "zh";
 
   async function generateTC(tcType: TCType) {
     setSelectedTCType(tcType);
-    setGenerating(true);
-    setError(null);
-    setTCResult(null);
+    setTCGenGenerating(true);
+    setTCGenError(null);
+    setTCGenResult(null);
 
     const queryMap: Record<TCType, string> = {
       normal: isZh ? "生成正常场景测试用例" : "Generate normal scenario test cases",
@@ -95,20 +94,20 @@ export default function TCGenPanel() {
         throw new Error(`Generate failed: ${response.status}`);
       }
       const data = await response.json();
-      setTCResult(data);
+      setTCGenResult(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
+      setTCGenError(err instanceof Error ? err.message : "Unknown error");
     } finally {
-      setGenerating(false);
+      setTCGenGenerating(false);
     }
   }
 
   function downloadTC() {
-    if (!tcResult?.tc_final) return;
-    const blob = new Blob([tcResult.tc_final], { type: "text/markdown" });
+    if (!tcgenResult?.tc_final) return;
+    const blob = new Blob([tcgenResult.tc_final], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    const tcType = tcResult.tc_type || "normal";
+    const tcType = tcgenResult.tc_type || "normal";
     const tcTypeToFile: Record<string, string> = {
       normal: "tc_normal",
       boundary: "tc_boundary",
@@ -120,8 +119,8 @@ export default function TCGenPanel() {
     URL.revokeObjectURL(url);
   }
 
-  const reviewPassed = tcResult?.review_report
-    ? (tcResult.review_report as Record<string, unknown>).passed === true
+  const reviewPassed = tcgenResult?.review_report
+    ? (tcgenResult.review_report as Record<string, unknown>).passed === true
     : false;
 
   return (
@@ -148,15 +147,15 @@ export default function TCGenPanel() {
               key={tcType}
               className={`tcgen-card ${isActive ? "active" : ""}`}
               onClick={() => generateTC(tcType)}
-              disabled={generating}
+              disabled={tcgenGenerating}
               style={{ borderColor: isActive ? info.color : undefined }}
             >
               <div className="tcgen-card-icon" style={{ background: info.color }}>
-                {generating && isActive ? <Loader2 size={28} className="spin" /> : <Icon size={28} />}
+                {tcgenGenerating && isActive ? <Loader2 size={28} className="spin" /> : <Icon size={28} />}
               </div>
               <strong>{info.label}</strong>
               <p>{info.description}</p>
-              {generating && isActive ? (
+              {tcgenGenerating && isActive ? (
                 <span className="generating-label">{isZh ? "生成中..." : "Generating..."}</span>
               ) : null}
             </button>
@@ -164,13 +163,13 @@ export default function TCGenPanel() {
         })}
       </div>
 
-      {error ? <div className="tcgen-error">❌ {error}</div> : null}
+      {tcgenError ? <div className="tcgen-error">❌ {tcgenError}</div> : null}
 
-      {tcResult ? (
+      {tcgenResult ? (
         <div className="tcgen-result">
           <div className="result-header">
             <span>
-              {isZh ? "生成完成" : "Generation Complete"} — {tcTypeInfo[tcResult.tc_type as TCType]?.label ?? tcResult.tc_type}
+              {isZh ? "生成完成" : "Generation Complete"} — {tcTypeInfo[tcgenResult.tc_type as TCType]?.label ?? tcgenResult.tc_type}
               {" "}
               {reviewPassed
                 ? isZh ? "✅ 审核通过" : "✅ Review Passed"
@@ -181,15 +180,15 @@ export default function TCGenPanel() {
             </button>
           </div>
 
-          {tcResult.storage_path ? (
+          {tcgenResult.storage_path ? (
             <div className="storage-info">
-              {isZh ? "已保存至" : "Saved to"}: <code>{tcResult.storage_path}</code>
+              {isZh ? "已保存至" : "Saved to"}: <code>{tcgenResult.storage_path}</code>
             </div>
           ) : null}
 
-          {tcResult.review_report ? (
+          {tcgenResult.review_report ? (
             <ReviewCard
-              report={tcResult.review_report as ReviewReport}
+              report={tcgenResult.review_report as ReviewReport}
               isZh={isZh}
             />
           ) : null}
@@ -197,7 +196,7 @@ export default function TCGenPanel() {
           <div className="tc-preview">
             <h3>{isZh ? "测试用例预览" : "Test Case Preview"}</h3>
             <div className="tc-preview-content">
-              <MarkdownMessage content={tcResult.tc_final.slice(0, 5000) + (tcResult.tc_final.length > 5000 ? "\n\n*(预览截断，下载完整文档)*" : "")} />
+              <MarkdownMessage content={tcgenResult.tc_final.slice(0, 5000) + (tcgenResult.tc_final.length > 5000 ? "\n\n*(预览截断，下载完整文档)*" : "")} />
             </div>
           </div>
         </div>

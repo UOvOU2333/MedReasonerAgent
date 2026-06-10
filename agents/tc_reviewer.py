@@ -73,6 +73,15 @@ def tc_reviewer_agent(state):
                    "passed": not has_gaps,
                    "detail": "通过" if not has_gaps else f"编号不连续"})
 
+    # CHK-03: Markdown 表格格式（表格必须有对齐的 |---| 分隔符）
+    import re
+    table_count = len(re.findall(r'\|[^\n]*\|[ \t]*\n[ \t]*\|[-: ]+\|', doc))
+    table_lines = len([l for l in doc.split('\n') if '|' in l])
+    has_tables = table_lines >= 6  # 至少有几行含 | 符号
+    checks.append({"check": "CHK-03", "item": "Markdown 表格格式",
+                   "passed": has_tables,
+                   "detail": f"发现含表格内容的文档" if has_tables else "未发现表格"})
+
     # CHK-08: 病历 JSON 完整性（检查是否包含 JSON 代码块）
     json_block_count = doc.count('```json')
     min_expected = 6 if tc_type == "normal" else (5 if tc_type == "boundary" else 5)
@@ -82,16 +91,16 @@ def tc_reviewer_agent(state):
                    "detail": f"发现 {json_block_count} 个 JSON 块" if has_enough_json
                    else f"仅 {json_block_count} 个 JSON 块，建议 ≥{min_expected}"})
 
-    # CHK-09: 用例数量达标
+    # CHK-09: 用例数量达标（tc_spec.md 规范：正常≥8, 边界≥7, 异常≥7）
     if tc_type == "normal":
         tc_count = len(_extract_numbers(doc, "TC-N-"))
-        min_required = 6
+        min_required = 8
     elif tc_type == "boundary":
         tc_count = len(_extract_numbers(doc, "TC-B-"))
-        min_required = 6
+        min_required = 7
     else:
         tc_count = len(_extract_numbers(doc, "TC-A-"))
-        min_required = 6
+        min_required = 7
     checks.append({"check": "CHK-09", "item": "用例数量达标",
                    "passed": tc_count >= min_required,
                    "detail": f"发现 {tc_count} 个测试用例，要求 ≥{min_required}"})

@@ -1,6 +1,10 @@
 import json
+from datetime import date
+
 from tools.llm import call_llm
 from tools.trace import append_trace
+
+TC_TODAY = date.today().isoformat()
 
 
 def tc_composer_agent(state):
@@ -14,13 +18,12 @@ def tc_composer_agent(state):
     drg_rules = state.get("drg_rules", {})
     medical_records = state.get("medical_records", {})
 
-    # 根据测试类型选择不同的 prompt 模板
     if tc_type == "normal":
-        prompt = _normal_prompt(project_name, language, drg_rules, medical_records)
+        prompt = _normal_prompt(project_name, language, drg_rules, medical_records, TC_TODAY)
     elif tc_type == "boundary":
-        prompt = _boundary_prompt(project_name, language, drg_rules, medical_records)
+        prompt = _boundary_prompt(project_name, language, drg_rules, medical_records, TC_TODAY)
     else:
-        prompt = _abnormal_prompt(project_name, language, drg_rules, medical_records)
+        prompt = _abnormal_prompt(project_name, language, drg_rules, medical_records, TC_TODAY)
 
     draft = call_llm(prompt, metadata={"agent_system": "tcgen", "tc_type": tc_type})
     state["tc_draft"] = draft
@@ -187,7 +190,7 @@ def _format_medical_records(medical_records: dict) -> str:
     return "\n".join(lines)
 
 
-def _normal_prompt(project_name: str, language: str, drg_rules: dict, medical_records: dict) -> str:
+def _normal_prompt(project_name: str, language: str, drg_rules: dict, medical_records: dict, generated_date: str = TC_TODAY) -> str:
     is_zh = language == "zh"
     spec_ref = (
         "请严格参照 docs/tc_spec.md 中「正常场景测试用例格式」章节规定的结构生成。"
@@ -200,6 +203,7 @@ You are a medical DRG test case designer generating NORMAL scenario test cases.
 Normal scenarios test valid diagnosis + procedure combinations that correctly map to DRG groups.
 
 Project: {project_name}
+Generated date: {generated_date}
 Description: MedReasonerAgent is a multi-agent biomedical knowledge graph reasoning system for CN-DRG 2018 grouping.
 
 {_format_drg_rules(drg_rules)}
@@ -210,20 +214,36 @@ Description: MedReasonerAgent is a multi-agent biomedical knowledge graph reason
 
 Generate a complete normal scenario test case document in {'Chinese' if is_zh else 'English'}.
 
-CRITICAL — You MUST use these EXACT markdown section headings (copy them verbatim, including the "##" prefix and numbering):
+CRITICAL — You MUST use these EXACT markdown section headings (copy them verbatim):
 
 ## 1. 测试概述
+### 1.1 测试目标
+### 1.2 测试范围
+### 1.3 参考资料
+
 ## 2. DRG 分组规则摘要
+### 2.1 知识图谱关系
+### 2.2 入组判定逻辑
+
 ## 3. 测试场景设计
+### 3.1 场景分类
+### 3.2 场景覆盖矩阵（表格：场景编号 | 诊断 | 手术 | MDC | ADRG | 并发症 | 最终DRG | 覆盖说明）
+
 ## 4. 测试用例
+### TC-N-01：（后续每个用例标题格式：### TC-N-XX：用例名称）
+
 ## 5. 测试数据
+### 5.1 病历样本汇总
+### 5.2 预期 DRG 分组映射表
 
 Content per section:
-- ## 1. 测试概述: 测试目标、测试范围（覆盖哪些诊断类别和手术类型）、参考资料
-- ## 2. DRG 分组规则摘要: 知识图谱关系表格、入组判定逻辑步骤
-- ## 3. 测试场景设计: 场景分类说明、场景覆盖矩阵表格（场景编号 | 诊断 | 手术 | MDC | ADRG | 并发症 | 最终DRG | 覆盖说明）
-- ## 4. 测试用例: 至少8个 TC-N-XX 编号的测试用例，每个用例使用标准表格格式（用例编号|用例名称|测试场景|前置条件|输入数据|预期DRG分组|预期置信度|测试步骤|预期结果），用例中的"输入数据"必须包含完整的病历 JSON
-- ## 5. 测试数据: 病历样本汇总、预期 DRG 分组映射表
+|- ## 1. 测试概述 / ### 1.1: 测试目标（验证 DRG 入组对诊断+手术组合的正确处理）
+|- ## 1. 测试概述 / ### 1.2: 测试范围（覆盖哪些 MDC、手术类型、并发症等级）
+|- ## 1. 测试概述 / ### 1.3: 参考资料（kg/drg_loader.py, docs/tc_spec.md）
+|- ## 2. DRG 分组规则摘要: 知识图谱关系表（5类关系）、入组判定逻辑步骤（4步）
+|- ## 3. 测试场景设计: 场景分类说明、场景覆盖矩阵表（8行）
+|- ## 4. 测试用例: TC-N-01 ~ TC-N-08 共 8 个用例，每个用例用属性表格格式（编号/名称/场景/前置条件/输入数据/预期DRG/置信度/步骤/结果）
+|- ## 5. 测试数据: 病历样本汇总表、预期DRG映射表
 
 Input Data JSON Format (CRITICAL — every test case's 输入数据 must follow this EXACT structure):
 ```json
@@ -240,19 +260,20 @@ Input Data JSON Format (CRITICAL — every test case's 输入数据 must follow 
 Expected DRG Format:
 - Final DRG code uses CN-DRG 2018 format: ADRG编码 + 后缀数字
 - 后缀: 5=无合并症(NONE), 9=一般合并症(CC), 1=严重合并症(MCC)
-- Examples: GB29 (胃手术+CC), HC15 (胆道手术+无CC), EC29 (胸壁手术+CC), IC35 (关节置换+无CC)
+- Examples: GB29 (胃手术+CC), HC15 (胆道手术+无CC), EC29 (胸壁手术+CC), IC35 (关节置换+无CC), FR39 (心血管内科+CC)
 - DRG codes should NEVER use letter suffixes like A/B (that's AR-DRG, not CN-DRG)
 
 Format requirements:
-- Include the meta information table at the top: | 属性 | 内容 | with 项目名称, 文档类型="正常场景测试用例", 文档版本, 生成日期, 生成方式, 状态, DRG版本
+- Include the meta information table at the top: | 属性 | 内容 | with 项目名称, 文档类型="正常场景测试用例", 文档版本, 生成日期 ({generated_date}), 生成方式, 状态, DRG版本
 - Use Markdown tables where appropriate
-- Each test case must have a unique TC-N-XX number (TC-N-01, TC-N-02, ... at least TC-N-08)
-- Cover at least 3 different MDC (MDCF循环系统, MDCE呼吸系统, MDCG消化道, MDCH肝胆胰, MDCI骨骼肌肉)
+- Each test case must have a unique TC-N-XX number (TC-N-01, TC-N-02, ... TC-N-08)
+- Cover at least 5 different MDC (MDCF循环系统, MDCE呼吸系统, MDCG消化道, MDCH肝胆胰, MDCI骨骼肌肉)
 - Cover at least 3 different procedure types (心血管手术, 消化系统手术, 骨科手术, 胸外科手术)
-- Cover at least 2 DRG group types (内科 and 外科)
-- Every test case MUST include a complete medical record JSON in the "输入数据" field using the CN-DRG field format (性别, 年龄, 主要诊断, 次要诊断列表, 主要手术, 其他手术列表)
+- Cover at least 2 DRG group types (内科 ADRG and 外科 ADRG)
+- Cover both CC and NONE complication levels (后缀 9 and 5)
+- Every test case MUST include a complete medical record JSON in the "输入数据" field
 - Use ONLY ICD-10 and ICD-9-CM-3 codes from the reference data and lookup tables provided above
-- Expected DRG groups MUST use CN-DRG 2018 numeric suffix format (5/9/1), NEVER use A/B letter suffixes
+- Expected DRG groups MUST use CN-DRG 2018 numeric suffix format (5/9/1)
 - When predicting expected DRG, follow the 4-step grouping logic: MDC→ADRG→CC/MCC→Final DRG
 - Document MUST end with: "*本文档由 TCGen Agent 自动生成，状态为草稿，需人工审核确认。*"
 - ABSOLUTELY NO "TODO", "TBD", "待定", "待补充" or any placeholder text anywhere in the entire document
@@ -261,7 +282,7 @@ Document title: # {project_name} 正常场景测试用例
 """
 
 
-def _boundary_prompt(project_name: str, language: str, drg_rules: dict, medical_records: dict) -> str:
+def _boundary_prompt(project_name: str, language: str, drg_rules: dict, medical_records: dict, generated_date: str = TC_TODAY) -> str:
     is_zh = language == "zh"
     spec_ref = (
         "请严格参照 docs/tc_spec.md 中「边界场景测试用例格式」章节规定的结构生成。"
@@ -278,6 +299,7 @@ Boundary scenarios test how DRG grouping changes when key variables are at bound
 - Gender-specific DRG groups
 
 Project: {project_name}
+Generated date: {generated_date}
 
 {_format_drg_rules(drg_rules)}
 
@@ -287,20 +309,34 @@ Project: {project_name}
 
 Generate a complete boundary scenario test case document in {'Chinese' if is_zh else 'English'}.
 
-CRITICAL — You MUST use these EXACT markdown section headings (copy them verbatim, including the "##" prefix and numbering):
+CRITICAL — You MUST use these EXACT markdown section headings (copy them verbatim):
 
 ## 1. 测试概述
+### 1.1 测试目标
+### 1.2 边界定义
+
 ## 2. 边界条件分析
+### 2.1 合并症影响分析
+### 2.2 年龄边界分析
+### 2.3 多手术组合影响
+
 ## 3. 测试场景设计
+### 3.1 边界场景矩阵（表格：场景编号 | 边界类型 | 变化因素 | 基线正常场景 | 预期影响）
+
 ## 4. 测试用例
+### TC-B-01：（后续每个用例标题格式：### TC-B-XX：用例名称）
+
 ## 5. 测试数据
+### 5.1 边界病历样本
+### 5.2 对比分析表
 
 Content per section:
-- ## 1. 测试概述: 测试目标、边界定义（说明哪些参数在边界上变化）
-- ## 2. 边界条件分析: 合并症影响分析（添加/移除CC编码 → DRG后缀变化 5↔9↔1）、年龄边界分析（如 17/18岁、60/61岁、新生儿/成人）、多手术组合影响（手术优先级选择）、性别差异分析
-- ## 3. 测试场景设计: 边界场景矩阵表格（场景编号 | 边界类型 | 变化因素 | 基线正常场景 | 预期影响）
-- ## 4. 测试用例: 至少7个 TC-B-XX 编号的边界测试用例，每个用例使用标准表格格式（用例编号|用例名称|边界类型|变化因素|基线场景|变化描述|输入数据|预期DRG变化|测试步骤|预期结果），"基线场景"应引用 TC-N-XX 编号，"输入数据"必须包含完整病历 JSON
-- ## 5. 测试数据: 边界病历样本汇总、对比分析表
+|- ## 1. 测试概述 / ### 1.1: 测试目标（验证边界条件下的 DRG 分组行为）
+|- ## 1. 测试概述 / ### 1.2: 边界定义（说明哪些参数在边界上变化）
+|- ## 2. 边界条件分析: 合并症影响（5↔9↔1）、年龄边界、多手术优先级、性别差异的分析
+|- ## 3. 测试场景设计: 边界场景矩阵表（7行，覆盖全部4种边界类型）
+|- ## 4. 测试用例: TC-B-01 ~ TC-B-07 共 7 个用例，每个用例用属性表格格式
+|- ## 5. 测试数据: 边界病历样本表、对比分析表
 
 Input Data JSON Format (SAME as normal scenarios — use CN-DRG field names):
 ```json
@@ -318,9 +354,9 @@ Expected DRG changes MUST use CN-DRG 2018 numeric suffix format: 5(NONE), 9(CC),
 For CC boundary tests: show the same ADRG with different suffixes (e.g., HC15 → HC19 when adding CC codes).
 
 Format requirements:
-- Meta information table at top: | 属性 | 内容 | with 文档类型="边界场景测试用例"
-- Each test case must have a unique TC-B-XX number (TC-B-01, TC-B-02, ... at least TC-B-07)
-- Cover all 4 boundary types: 合并症有无(≥2 cases), 年龄边界(≥2 cases), 多手术组合(≥1 case), 性别差异(≥1 case)
+- Meta information table at top: | 属性 | 内容 | with 文档类型="边界场景测试用例", 生成日期 ({generated_date})
+- Each test case must have a unique TC-B-XX number (TC-B-01, TC-B-02, ... TC-B-07)
+- Cover all 4 boundary types with these minimums: 合并症有无(≥2 cases), 年龄边界(≥2 cases), 多手术组合(≥1 case), 性别差异(≥1 case)
 - Each "基线场景" field should reference a normal scenario like "TC-N-01" to show the comparison
 - Every test case MUST include a complete medical record JSON using CN-DRG field format (性别, 年龄, 主要诊断, 次要诊断列表, 主要手术, 其他手术列表)
 - Use ONLY ICD codes from the reference data and lookup tables
@@ -332,7 +368,7 @@ Document title: # {project_name} 边界场景测试用例
 """
 
 
-def _abnormal_prompt(project_name: str, language: str, drg_rules: dict, medical_records: dict) -> str:
+def _abnormal_prompt(project_name: str, language: str, drg_rules: dict, medical_records: dict, generated_date: str = TC_TODAY) -> str:
     is_zh = language == "zh"
     spec_ref = (
         "请严格参照 docs/tc_spec.md 中「异常场景测试用例格式」章节规定的结构生成。"
@@ -349,6 +385,7 @@ Abnormal scenarios test system behavior when given invalid, incomplete, or contr
 - Format errors (malformed JSON, wrong data types)
 
 Project: {project_name}
+Generated date: {generated_date}
 
 {_format_drg_rules(drg_rules)}
 
@@ -358,20 +395,34 @@ Project: {project_name}
 
 Generate a complete abnormal scenario test case document in {'Chinese' if is_zh else 'English'}.
 
-CRITICAL — You MUST use these EXACT markdown section headings (copy them verbatim, including the "##" prefix and numbering):
+CRITICAL — You MUST use these EXACT markdown section headings (copy them verbatim):
 
 ## 1. 测试概述
+### 1.1 测试目标
+### 1.2 异常分类
+
 ## 2. 异常条件分析
+### 2.1 编码错误类型
+### 2.2 信息缺失类型
+### 2.3 逻辑冲突类型
+
 ## 3. 测试场景设计
+### 3.1 异常场景矩阵（表格：场景编号 | 异常类型 | 触发条件 | 输入示例 | 预期系统行为）
+
 ## 4. 测试用例
+### TC-A-01：（后续每个用例标题格式：### TC-A-XX：用例名称）
+
 ## 5. 测试数据
+### 5.1 异常病历样本
+### 5.2 错误处理验证表
 
 Content per section:
-- ## 1. 测试概述: 测试目标、异常分类（编码错误/信息缺失/逻辑冲突/格式错误）
-- ## 2. 异常条件分析: 编码错误类型分析（无效编码如 "XXXX.X" 不在MDC_TABLE、编码名称不匹配）、信息缺失类型分析（缺"主要诊断"字段、缺"年龄"/"性别"字段）、逻辑冲突类型分析（诊断与手术不匹配，如产科诊断+骨科手术）、格式错误分析（JSON格式错误、字段类型错误如 年龄="abc"）
-- ## 3. 测试场景设计: 异常场景矩阵表格（场景编号 | 异常类型 | 触发条件 | 输入示例 | 预期系统行为）
-- ## 4. 测试用例: 至少7个 TC-A-XX 编号的异常测试用例，每个用例使用标准表格格式（用例编号|用例名称|异常类型|触发条件|输入数据|预期错误码|预期错误信息|预期系统行为|测试步骤|预期结果），"输入数据"必须包含含错误的病历 JSON
-- ## 5. 测试数据: 异常病历样本汇总、错误处理验证表
+|- ## 1. 测试概述 / ### 1.1: 测试目标（验证异常输入的降级处理能力）
+|- ## 1. 测试概述 / ### 1.2: 异常分类（编码错误/信息缺失/逻辑冲突/格式错误）
+|- ## 2. 异常条件分析: 各异常类型的详细分析
+|- ## 3. 测试场景设计: 异常场景矩阵表（7行，覆盖全部4种异常类型）
+|- ## 4. 测试用例: TC-A-01 ~ TC-A-07 共 7 个用例，每个用例用属性表格格式（含预期错误码/预期错误信息/预期系统行为）
+|- ## 5. 测试数据: 异常病历样本汇总、错误处理验证表
 
 Input Data JSON Format for abnormal cases:
 - 编码错误 cases: use CN-DRG field format but with codes like "XXXX.9" as 疾病编码 or "999.99" as 手术编码
@@ -398,10 +449,10 @@ Expected system behavior for abnormal cases:
 - 格式错误 → json.loads() 抛出异常, 降级到 NLP 模式
 
 Format requirements:
-- Meta information table at top: | 属性 | 内容 | with 文档类型="异常场景测试用例"
-- Each test case must have a unique TC-A-XX number (TC-A-01, TC-A-02, ... at least TC-A-07)
+- Meta information table at top: | 属性 | 内容 | with 文档类型="异常场景测试用例", 生成日期 ({generated_date})
+- Each test case must have a unique TC-A-XX number (TC-A-01, TC-A-02, ... TC-A-07)
 - Cover all 4 abnormal types: 编码错误(≥2 cases), 信息缺失(≥2 cases), 逻辑冲突(≥1 case), 格式错误(≥1 case)
-- For 编码错误 cases, use clearly invalid ICD codes like "XXXX.9", "999.99", or codes that don't match their names
+- For 编码错误 cases, use clearly invalid ICD codes like "XXXX.9", "999.99"
 - For 信息缺失 cases, omit "主要诊断" or "年龄" fields from the CN-DRG JSON format
 - For 逻辑冲突 cases, use diagnosis-surgery combos that make no medical sense (e.g., O80.0 顺产 + 81.54001 膝关节置换)
 - For 格式错误 cases, provide truncated/malformed JSON or wrong field types

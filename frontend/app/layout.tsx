@@ -6,6 +6,8 @@ export const metadata: Metadata = {
   description: "Multi-agent medical reasoning trace UI",
 };
 
+export const revalidate = 300;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">

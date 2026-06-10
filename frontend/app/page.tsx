@@ -27,14 +27,13 @@ export default function Home() {
   const addEvent = useTraceStore((state) => state.addEvent);
   const setLanguage = useTraceStore((state) => state.setLanguage);
   const startRun = useTraceStore((state) => state.startRun);
-  const reset = useTraceStore((state) => state.reset);
   const stopRef = useRef<null | (() => void)>(null);
 
   function switchTab(tab: Tab) {
     if (running) return; // 运行中不允许切换
     stopRef.current?.();
     setActiveTab(tab);
-    reset();
+    // 不调用 reset()，保留当前面板的生成结果
     setRunning(false);
   }
 
@@ -111,12 +110,12 @@ export default function Home() {
                 ? "文档生成"
                 : "Document Generation"
               : activeTab === "tcgen"
-                ? language === "zh"
-                  ? "测试用例生成"
-                  : "Test Case Generation"
-                : language === "zh"
-                  ? "文档存储系统"
-                  : "Document Storage System"}
+                  ? language === "zh"
+                    ? "测试用例生成"
+                    : "Test Case Generation"
+                  : language === "zh"
+                    ? "文档存储系统"
+                    : "Document Storage System"}
         </div>
       </header>
       <section className="workspace">

@@ -66,6 +66,23 @@ class TCGenState(TypedDict):
     trace: List[dict]
 
 
+# ── 测试执行智能体状态 ──────────────────────────────
+class TestExecutorState(TypedDict):
+    query: str             # 用户指令
+    language: str         # zh / en
+    mode: str             # 执行模式：single / batch / all / by_type
+    tc_pattern: str       # 测试用例编号匹配模式，如 "TC-N-01" 或 "TC-*" 或 "all"
+
+    # 子智能体传递
+    loaded_cases: List[dict]     # test_loader 输出：从文件/文档中解析出的测试用例列表
+    execution_results: List[dict] # test_runner 输出：每条用例的执行结果含对比
+    execution_summary: dict       # test_runner 输出的汇总统计
+    report: str                   # test_reporter 输出：最终 Markdown 报告
+
+    answer: str           # 最终输出
+    trace: List[dict]
+
+
 # ── 虚拟文档系统智能体状态 ──────────────────────────────
 class VDocState(TypedDict):
     query: str             # 操作指令

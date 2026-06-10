@@ -12,7 +12,7 @@ load_dotenv()
 def call_llm(prompt: str, metadata: dict[str, Any] | None = None) -> str:
     api_key = os.getenv("OPENAI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
-        return offline_response(prompt, metadata=metadata)
+        return offline_response(prompt, metadata)
 
     client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL") or None)
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -48,6 +48,12 @@ def offline_response(prompt: str, metadata: dict[str, Any] | None = None) -> str
     # 兜底：通过 prompt 特征识别文档生成
     if _is_docgen_prompt(text):
         return _offline_docgen_dispatch(prompt, metadata)
+
+    # ── 测试用例生成 fallback（必须在 DRG 推理 fallback 之前拦截）──
+    if metadata and metadata.get("agent_system") == "tcgen":
+        return _offline_tcgen_dispatch(prompt, metadata)
+    if _is_tcgen_prompt(text):
+        return _offline_tcgen_dispatch(prompt, metadata)
 
     # ── DRG 医疗推理 fallback ──
     if "Extract biomedical entities" in text:
@@ -128,6 +134,878 @@ def _offline_docgen_dispatch(prompt: str, metadata: dict[str, Any] | None = None
         return _offline_testing_doc(prompt)
     # 默认返回需求分析文档
     return _offline_requirements_doc(prompt)
+
+
+def _is_tcgen_prompt(text: str) -> bool:
+    """检测是否为测试用例生成类 prompt。"""
+    markers = [
+        "tcgen", "tc_spec.md",
+        "tc_normal", "tc_boundary", "tc_abnormal",
+        "normal scenario test case", "boundary scenario test case",
+        "abnormal scenario test case",
+        "test case generation supervisor",
+        "tc_composer",
+    ]
+    text_lower = text.lower()
+    return any(m.lower() in text_lower for m in markers)
+
+
+def _offline_tcgen_dispatch(prompt: str, metadata: dict[str, Any] | None = None) -> str:
+    """根据 tc_type 分发到正确的测试用例生成 fallback。"""
+    if metadata and metadata.get("tc_type"):
+        tc_type = metadata["tc_type"]
+        if tc_type == "boundary":
+            return _offline_tcgen_boundary(prompt)
+        if tc_type == "abnormal":
+            return _offline_tcgen_abnormal(prompt)
+        return _offline_tcgen_normal(prompt)
+
+    text_lower = prompt.lower()
+    if "boundary" in text_lower:
+        return _offline_tcgen_boundary(prompt)
+    if "abnormal" in text_lower:
+        return _offline_tcgen_abnormal(prompt)
+    return _offline_tcgen_normal(prompt)
+
+
+def _offline_tcgen_normal(prompt: str) -> str:
+    """生成离线正常场景测试用例文档模板。"""
+    import re
+    from datetime import date
+    project_match = re.search(r'Project:\s*(\S+)', prompt)
+    project_name = project_match.group(1) if project_match else "MedReasonerAgent"
+    today = date.today().isoformat()
+
+    # JSON template for medical records
+    emr_json = (
+        '{{"性别":"男","年龄":整数,"主要诊断":{{"疾病名称":"中文名称","疾病编码":"ICD-10编码"}},'
+        '"次要诊断列表":[{{"疾病名称":"...","疾病编码":"ICD-10编码"}}],'
+        '"主要手术":{{"手术名称":"中文名称","手术编码":"ICD-9-CM-3编码","手术级别":1-4}},'
+        '"其他手术列表":[{{"手术名称":"...","手术编码":"ICD-9-CM-3编码","手术级别":1-4}}]}}'
+    )
+
+    # TC-N-01 JSON
+    tcn01_json = (
+        '{{"性别":"男","年龄":65,"主要诊断":{{"疾病名称":"急性透壁性心肌梗死","疾病编码":"I21.3"}},'
+        '"次要诊断列表":[{{"疾病名称":"原发性高血压","疾病编码":"I10"}}],'
+        '"主要手术":{{"手术名称":"冠状动脉支架植入术","手术编码":"36.06001","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+    tcn02_json = (
+        '{{"性别":"女","年龄":48,"主要诊断":{{"疾病名称":"细菌性肺炎","疾病编码":"J15.9"}},'
+        '"次要诊断列表":[],'
+        '"主要手术":{{"手术名称":"胸腔穿刺术","手术编码":"34.9103","手术级别":1}},'
+        '"其他手术列表":[]}}'
+    )
+    tcn03_json = (
+        '{{"性别":"男","年龄":72,"主要诊断":{{"疾病名称":"胃窦恶性肿瘤","疾病编码":"C16.301"}},'
+        '"次要诊断列表":[{{"疾病名称":"肠粘连","疾病编码":"K66.002"}}],'
+        '"主要手术":{{"手术名称":"腹腔镜胃大部切除伴胃空肠吻合术","手术编码":"43.7x03","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+    tcn04_json = (
+        '{{"性别":"女","年龄":55,"主要诊断":{{"疾病名称":"胆管狭窄","疾病编码":"K83.105"}},'
+        '"次要诊断列表":[],'
+        '"主要手术":{{"手术名称":"胆总管切除术","手术编码":"51.6303","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+    tcn05_json = (
+        '{{"性别":"女","年龄":68,"主要诊断":{{"疾病名称":"膝关节骨性关节炎","疾病编码":"M17.9"}},'
+        '"次要诊断列表":[{{"疾病名称":"慢性肾脏病","疾病编码":"N18.9"}}],'
+        '"主要手术":{{"手术名称":"全膝关节置换术","手术编码":"81.54001","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+    tcn06_json = (
+        '{{"性别":"男","年龄":58,"主要诊断":{{"疾病名称":"原发性高血压","疾病编码":"I10"}},'
+        '"次要诊断列表":[{{"疾病名称":"2型糖尿病","疾病编码":"E11.9"}}],'
+        '"主要手术":{{"手术名称":"常规检查","手术编码":"89.0","手术级别":1}},'
+        '"其他手术列表":[]}}'
+    )
+    tcn07_json = (
+        '{{"性别":"女","年龄":45,"主要诊断":{{"疾病名称":"胆囊结石伴急性胆囊炎","疾病编码":"K80.0"}},'
+        '"次要诊断列表":[],'
+        '"主要手术":{{"手术名称":"腹腔镜胆囊切除术","手术编码":"51.22001","手术级别":2}},'
+        '"其他手术列表":[]}}'
+    )
+    tcn08_json = (
+        '{{"性别":"男","年龄":78,"主要诊断":{{"疾病名称":"股骨颈骨折","疾病编码":"S72.0"}},'
+        '"次要诊断列表":[{{"疾病名称":"腔隙性脑梗死","疾病编码":"I63.801"}}],'
+        '"主要手术":{{"手术名称":"股骨骨折切开复位内固定术","手术编码":"79.35001","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+
+    body = _NORMAL_TC_TEMPLATE % {
+        'project_name': project_name,
+        'today': today,
+        'emr_json': emr_json,
+        'tcn01_json': tcn01_json,
+        'tcn02_json': tcn02_json,
+        'tcn03_json': tcn03_json,
+        'tcn04_json': tcn04_json,
+        'tcn05_json': tcn05_json,
+        'tcn06_json': tcn06_json,
+        'tcn07_json': tcn07_json,
+        'tcn08_json': tcn08_json,
+    }
+    return body
+
+
+def _offline_tcgen_boundary(prompt: str) -> str:
+    """生成离线边界场景测试用例文档模板。"""
+    import re
+    from datetime import date
+    project_match = re.search(r'Project:\s*(\S+)', prompt)
+    project_name = project_match.group(1) if project_match else "MedReasonerAgent"
+    today = date.today().isoformat()
+
+    tcb01_json = (
+        '{{"性别":"女","年龄":55,"主要诊断":{{"疾病名称":"胆管狭窄","疾病编码":"K83.105"}},'
+        '"次要诊断列表":[{{"疾病名称":"肠粘连","疾病编码":"K66.002"}}],'
+        '"主要手术":{{"手术名称":"胆总管切除术","手术编码":"51.6303","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+    tcb02_json = (
+        '{{"性别":"女","年龄":55,"主要诊断":{{"疾病名称":"胆管狭窄","疾病编码":"K83.105"}},'
+        '"次要诊断列表":[{{"疾病名称":"急性透壁性心肌梗死","疾病编码":"I21.3"}}],'
+        '"主要手术":{{"手术名称":"胆总管切除术","手术编码":"51.6303","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+    tcb03_json = (
+        '{{"性别":"男","年龄":72,"主要诊断":{{"疾病名称":"胃窦恶性肿瘤","疾病编码":"C16.301"}},'
+        '"次要诊断列表":[],'
+        '"主要手术":{{"手术名称":"腹腔镜胃大部切除伴胃空肠吻合术","手术编码":"43.7x03","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+    tcb04_json = (
+        '{{"性别":"男","年龄":17,"主要诊断":{{"疾病名称":"急性透壁性心肌梗死","疾病编码":"I21.3"}},'
+        '"次要诊断列表":[{{"疾病名称":"原发性高血压","疾病编码":"I10"}}],'
+        '"主要手术":{{"手术名称":"冠状动脉支架植入术","手术编码":"36.06001","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+    tcb05_json = (
+        '{{"性别":"男","年龄":79,"主要诊断":{{"疾病名称":"股骨颈骨折","疾病编码":"S72.0"}},'
+        '"次要诊断列表":[{{"疾病名称":"腔隙性脑梗死","疾病编码":"I63.801"}}],'
+        '"主要手术":{{"手术名称":"股骨骨折切开复位内固定术","手术编码":"79.35001","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+    tcb06_json = (
+        '{{"性别":"男","年龄":72,"主要诊断":{{"疾病名称":"胃窦恶性肿瘤","疾病编码":"C16.301"}},'
+        '"次要诊断列表":[{{"疾病名称":"肠粘连","疾病编码":"K66.002"}}],'
+        '"主要手术":{{"手术名称":"腹腔镜胃大部切除伴胃空肠吻合术","手术编码":"43.7x03","手术级别":3}},'
+        '"其他手术列表":[{{"手术名称":"超声引导下胸腔穿刺术","手术编码":"34.9103","手术级别":1}},'
+        '{{"手术名称":"肠粘连松解术","手术编码":"54.5903","手术级别":2}}]}}'
+    )
+    tcb07_json = (
+        '{{"性别":"男","年龄":65,"主要诊断":{{"疾病名称":"膝关节骨性关节炎","疾病编码":"M17.9"}},'
+        '"次要诊断列表":[{{"疾病名称":"慢性肾脏病","疾病编码":"N18.9"}}],'
+        '"主要手术":{{"手术名称":"全膝关节置换术","手术编码":"81.54001","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+
+    body = _BOUNDARY_TC_TEMPLATE % {
+        'project_name': project_name,
+        'today': today,
+        'tcb01_json': tcb01_json,
+        'tcb02_json': tcb02_json,
+        'tcb03_json': tcb03_json,
+        'tcb04_json': tcb04_json,
+        'tcb05_json': tcb05_json,
+        'tcb06_json': tcb06_json,
+        'tcb07_json': tcb07_json,
+    }
+    return body
+
+
+def _offline_tcgen_abnormal(prompt: str) -> str:
+    """生成离线异常场景测试用例文档模板。"""
+    import re
+    from datetime import date
+    project_match = re.search(r'Project:\s*(\S+)', prompt)
+    project_name = project_match.group(1) if project_match else "MedReasonerAgent"
+    today = date.today().isoformat()
+
+    tca01_json = (
+        '{{"性别":"男","年龄":60,"主要诊断":{{"疾病名称":"未知疾病","疾病编码":"XXXX.9"}},'
+        '"次要诊断列表":[],'
+        '"主要手术":{{"手术名称":"常规手术","手术编码":"99.99","手术级别":1}},'
+        '"其他手术列表":[]}}'
+    )
+    tca02_json = (
+        '{{"性别":"男","年龄":55,"主要诊断":{{"疾病名称":"胆管狭窄","疾病编码":"K83.105"}},'
+        '"次要诊断列表":[],'
+        '"主要手术":{{"疾病名称":"未知手术","手术编码":"999.99","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+    tca03_json = (
+        '{{"性别":"男","年龄":60,"次要诊断列表":[{{"疾病名称":"高血压","疾病编码":"I10"}}],'
+        '"主要手术":{{"疾病名称":"支架植入","手术编码":"36.06001","手术级别":3}}}}'
+    )
+    tca04_json = (
+        '{{"性别":"女","主要诊断":{{"疾病名称":"胆囊结石","疾病编码":"K80.0"}},'
+        '"次要诊断列表":[],'
+        '"主要手术":{{"疾病名称":"腹腔镜胆囊切除术","手术编码":"51.22001","手术级别":2}},'
+        '"其他手术列表":[]}}'
+    )
+    tca05_json = (
+        '{{"性别":"女","年龄":28,"主要诊断":{{"疾病名称":"头位顺产","疾病编码":"O80.0"}},'
+        '"次要诊断列表":[],'
+        '"主要手术":{{"疾病名称":"全膝关节置换术","手术编码":"81.54001","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+    tca06_json = (
+        '{{"性别":"男","年龄":60,"主要诊断":{{"疾病名称":"心肌梗死","疾病编码":"I21.3"}}}'
+    )
+    tca07_json = (
+        '{{"性别":"男","年龄":"六十八","主要诊断":{{"疾病名称":"胆管狭窄","疾病编码":"K83.105"}},'
+        '"次要诊断列表":[],'
+        '"主要手术":{{"疾病名称":"胆总管切除术","手术编码":"51.6303","手术级别":3}},'
+        '"其他手术列表":[]}}'
+    )
+
+    body = _ABNORMAL_TC_TEMPLATE % {
+        'project_name': project_name,
+        'today': today,
+        'tca01_json': tca01_json,
+        'tca02_json': tca02_json,
+        'tca03_json': tca03_json,
+        'tca04_json': tca04_json,
+        'tca05_json': tca05_json,
+        'tca06_json': tca06_json,
+        'tca07_json': tca07_json,
+    }
+    return body
+
+
+_NORMAL_TC_TEMPLATE = """| 属性 | 内容 |
+|------|------|
+| **项目名称** | %(project_name)s |
+| **文档类型** | 正常场景测试用例 |
+| **文档版本** | V1.0 |
+| **生成日期** | %(today)s |
+| **生成方式** | AI 自动生成（TCGen Agent） |
+| **状态** | 草稿 |
+| **DRG 版本** | CN-DRG 2018（基于项目内置 MDC/ADRG/CC 查表） |
+
+# %(project_name)s 正常场景测试用例
+
+## 1. 测试概述
+
+### 1.1 测试目标
+
+验证 MedReasonerAgent 的 DRG 入组推理模块对常见诊断 + 手术组合的正确处理能力。测试系统能否根据 ICD-10 诊断编码正确匹配 MDC，根据 ICD-9-CM-3 手术编码匹配外科 ADRG，并根据 CC/MCC 次要诊断正确判定并发症等级，最终输出符合 CN-DRG 2018 规范的 DRG 编码。
+
+### 1.2 测试范围
+
+- 覆盖 MDC：MDCF（循环系统）、MDCE（呼吸系统）、MDCG（消化道）、MDCH（肝胆胰）、MDCI（骨骼肌肉）
+- 覆盖手术类型：心血管手术，消化系统手术，肝胆胰手术，骨科手术，呼吸系统手术
+- 覆盖 DRG 类型：内科 ADRG（FR3、GR1 等）、外科 ADRG（GB2、HC1、IC3、FM2 等）
+- 覆盖并发症等级：无合并症（NONE 后缀5）、一般合并症（CC 后缀9）
+
+### 1.3 参考资料
+
+- CN-DRG 2018 分组规则（kg/drg_loader.py）
+- 测试用例格式规范（docs/tc_spec.md）
+
+## 2. DRG 分组规则摘要
+
+### 2.1 知识图谱关系
+
+| 源节点 | 关系 | 目标节点 | 说明 |
+|--------|------|----------|------|
+| symptom | suggests | disease | 症状提示可能疾病 |
+| disease | mapped_to | drg_group | 疾病映射到 DRG 分组 |
+| disease | treated_by | treatment | 疾病对应治疗方式 |
+| risk_factor | increases_risk_of | disease | 风险因素增加疾病概率 |
+| test | confirms_or_rules_out | disease | 检查项目确定或排除疾病 |
+
+### 2.2 入组判定逻辑
+
+1. **Step 1 — 确定 MDC**：取主要诊断 ICD-10 编码的前缀，在 MDC_TABLE 中按前缀长度降序匹配，取最长匹配。
+2. **Step 2 — 确定 ADRG**：在匹配到的 MDC 下，将手术 ICD-9-CM-3 编码前缀与 ADRG_TABLE 逐级比对（5→4→3→2位）。命中外科条目则为外科 ADRG；无匹配则回退到该 MDC 的内科 ADRG。
+3. **Step 3 — 判定 CC/MCC**：遍历所有次要诊断编码，先在 MCC_SET 精确查找，再在 CC_SET 精确查找。MCC 优先于 CC。
+4. **Step 4 — 组装最终 DRG**：ADRG 编码 + 并发症后缀（NONE→5, CC→9, MCC→1）→ 最终 DRG。
+
+## 3. 测试场景设计
+
+### 3.1 场景分类
+
+本测试套件覆盖以下场景类型：
+
+- **内科场景**：有主要诊断，无主要手术或手术不匹配，回退到内科 ADRG
+- **外科场景**：主要诊断 + 主要手术均匹配到外科 ADRG
+- **CC 场景**：主要诊断 + 手术 + 次要诊断含 CC 编码
+- **MCC 场景**：主要诊断 + 手术 + 次要诊断含 MCC 编码
+- **复合手术场景**：主要诊断 + 主要手术 + 其他手术列表
+
+### 3.2 场景覆盖矩阵
+
+| 场景编号 | 诊断 | 手术 | MDC | ADRG | 并发症 | 最终DRG | 覆盖说明 |
+|----------|------|------|------|------|--------|---------|----------|
+| TC-N-01 | I21.3 急性透壁性心肌梗死 | 36.06001 冠脉支架植入 | MDCF | FM2 | CC（I10） | FM29 | 心血管+CC |
+| TC-N-02 | J15.9 细菌性肺炎 | 无（回退内科） | MDCE | ER3 | NONE | ER35 | 呼吸系统内科 |
+| TC-N-03 | C16.301 胃窦恶性肿瘤 | 43.7x03 腹腔镜胃大部切除 | MDCG | GB2 | CC（K66.002） | GB29 | 消化道外科+CC |
+| TC-N-04 | K83.105 胆管狭窄 | 51.6303 胆总管切除术 | MDCH | HC1 | NONE | HC15 | 肝胆胰外科+无CC |
+| TC-N-05 | M17.9 膝关节骨性关节炎 | 81.54001 全膝关节置换 | MDCI | IC3 | CC（N18.9 CKD） | IC39 | 骨科外科+CC |
+| TC-N-06 | I10 原发性高血压 | 无（回退内科） | MDCF | FR3 | CC（E11.9 糖尿病） | FR39 | 心血管内科+CC |
+| TC-N-07 | K80.0 胆囊结石伴急性胆囊炎 | 51.22001 腹腔镜胆囊切除 | MDCH | HC2 | NONE | HC25 | 肝胆胰外科+无CC |
+| TC-N-08 | S72.0 股骨颈骨折 | 79.35001 股骨骨折切开复位 | MDCI | ID1 | CC（I63.801 腔隙性脑梗死） | ID19 | 骨折外科+CC |
+
+## 4. 测试用例
+
+### TC-N-01：心血管支架植入伴高血压
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-N-01 |
+| **用例名称** | 心血管支架植入伴高血压 |
+| **测试场景** | 急性心肌梗死患者行冠脉支架植入术，伴原发性高血压（CC） |
+| **前置条件** | 系统已加载 kg/drg_loader.py 中的 MDCF/ADRG/CC 查表 |
+| **输入数据** | ```json\n%(tcn01_json)s\n``` |
+| **预期 DRG 分组** | MDCF → FM2（经皮心血管介入治疗）→ CC → FM29 |
+| **预期置信度** | 高 |
+| **测试步骤** | 1. 提交 EMR JSON，系统调用 entity._parse_emr() 解析<br>2. get_mdc("I21.3") → MDCF<br>3. get_adrg(MDCF, ["36.06001"]) → FM2<br>4. check_complications(["I10"]) → CC<br>5. resolve_drg("FM2", "CC") → FM29 |
+| **预期结果** | drg_result: {"mdc":"MDCF","adrg":"FM2","drg":"FM29","complication":"CC"} |
+
+### TC-N-02：细菌性肺炎内科治疗
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-N-02 |
+| **用例名称** | 细菌性肺炎内科治疗 |
+| **测试场景** | 细菌性肺炎患者，无匹配手术，回退到呼吸系统内科 ADRG |
+| **前置条件** | 系统已加载 kg/drg_loader.py |
+| **输入数据** | ```json\n%(tcn02_json)s\n``` |
+| **预期 DRG 分组** | MDCE → ER3（呼吸系统内科疾病）→ NONE → ER35 |
+| **预期置信度** | 高 |
+| **测试步骤** | 1. get_mdc("J15.9") → MDCE<br>2. 手术 34.9103 不在 ADRG_TABLE 中，回退到 MEDICAL_ADRG → ER3<br>3. check_complications([]) → NONE<br>4. resolve_drg("ER3", "NONE") → ER35 |
+| **预期结果** | drg_result: {"mdc":"MDCE","adrg":"ER3","drg":"ER35","complication":"NONE"} |
+
+### TC-N-03：胃癌手术伴肠粘连
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-N-03 |
+| **用例名称** | 胃癌手术伴肠粘连 |
+| **测试场景** | 胃窦恶性肿瘤行腹腔镜胃大部切除术，伴肠粘连（CC） |
+| **前置条件** | 系统已加载 kg/drg_loader.py |
+| **输入数据** | ```json\n%(tcn03_json)s\n``` |
+| **预期 DRG 分组** | MDCG → GB2 → CC（K66.002）→ GB29 |
+| **预期置信度** | 高 |
+| **测试步骤** | 1. get_mdc("C16.301") → MDCG（C16 前缀优先于 K）<br>2. get_adrg(MDCG, ["43.7x03"]) → GB2<br>3. check_complications(["K66.002"]) → CC<br>4. resolve_drg("GB2", "CC") → GB29 |
+| **预期结果** | drg_result: {"mdc":"MDCG","adrg":"GB2","drg":"GB29","complication":"CC"} |
+
+### TC-N-04：胆管狭窄手术无合并症
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-N-04 |
+| **用例名称** | 胆管狭窄手术无合并症 |
+| **测试场景** | 胆管狭窄患者行胆总管切除术，无次要诊断 |
+| **前置条件** | 系统已加载 kg/drg_loader.py |
+| **输入数据** | ```json\n%(tcn04_json)s\n``` |
+| **预期 DRG 分组** | MDCH → HC1 → NONE → HC15 |
+| **预期置信度** | 高 |
+| **测试步骤** | 1. get_mdc("K83.105") → MDCH（K83 前缀优先于 K）<br>2. get_adrg(MDCH, ["51.6303"]) → HC1<br>3. check_complications([]) → NONE<br>4. resolve_drg("HC1", "NONE") → HC15 |
+| **预期结果** | drg_result: {"mdc":"MDCH","adrg":"HC1","drg":"HC15","complication":"NONE"} |
+
+### TC-N-05：膝关节置换伴慢性肾脏病
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-N-05 |
+| **用例名称** | 膝关节置换伴慢性肾脏病 |
+| **测试场景** | 膝关节骨性关节炎行全膝关节置换术，伴慢性肾脏病（CC） |
+| **前置条件** | 系统已加载 kg/drg_loader.py |
+| **输入数据** | ```json\n%(tcn05_json)s\n``` |
+| **预期 DRG 分组** | MDCI → IC3 → CC（N18.9）→ IC39 |
+| **预期置信度** | 高 |
+| **测试步骤** | 1. get_mdc("M17.9") → MDCI<br>2. get_adrg(MDCI, ["81.54001"]) → IC3<br>3. check_complications(["N18.9"]) → CC<br>4. resolve_drg("IC3", "CC") → IC39 |
+| **预期结果** | drg_result: {"mdc":"MDCI","adrg":"IC3","drg":"IC39","complication":"CC"} |
+
+### TC-N-06：高血压伴糖尿病（内科）
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-N-06 |
+| **用例名称** | 高血压伴糖尿病（内科） |
+| **测试场景** | 原发性高血压伴 2 型糖尿病患者，内科治疗，无手术匹配 |
+| **前置条件** | 系统已加载 kg/drg_loader.py |
+| **输入数据** | ```json\n%(tcn06_json)s\n``` |
+| **预期 DRG 分组** | MDCF → FR3（心血管内科）→ CC → FR39 |
+| **预期置信度** | 中 |
+| **测试步骤** | 1. get_mdc("I10") → MDCF<br>2. 手术 89.0 不在 ADRG_TABLE，回退 MEDICAL_ADRG → FR3<br>3. check_complications(["E11.9"]) → CC<br>4. resolve_drg("FR3", "CC") → FR39 |
+| **预期结果** | drg_result: {"mdc":"MDCF","adrg":"FR3","drg":"FR39","complication":"CC"} |
+
+### TC-N-07：急性胆囊炎腹腔镜切除
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-N-07 |
+| **用例名称** | 急性胆囊炎腹腔镜切除 |
+| **测试场景** | 胆囊结石伴急性胆囊炎，行腹腔镜胆囊切除术，无次要诊断 |
+| **前置条件** | 系统已加载 kg/drg_loader.py |
+| **输入数据** | ```json\n%(tcn07_json)s\n``` |
+| **预期 DRG 分组** | MDCH → HC2 → NONE → HC25 |
+| **预期置信度** | 高 |
+| **测试步骤** | 1. get_mdc("K80.0") → MDCH<br>2. get_adrg(MDCH, ["51.22001"]) → HC2（MDCH|51.2 匹配）<br>3. check_complications([]) → NONE<br>4. resolve_drg("HC2", "NONE") → HC25 |
+| **预期结果** | drg_result: {"mdc":"MDCH","adrg":"HC2","drg":"HC25","complication":"NONE"} |
+
+### TC-N-08：股骨骨折手术伴脑梗死
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-N-08 |
+| **用例名称** | 股骨骨折手术伴脑梗死 |
+| **测试场景** | 股骨颈骨折患者行切开复位内固定术，伴腔隙性脑梗死（CC） |
+| **前置条件** | 系统已加载 kg/drg_loader.py |
+| **输入数据** | ```json\n%(tcn08_json)s\n``` |
+| **预期 DRG 分组** | MDCI → ID1 → CC（I63.801）→ ID19 |
+| **预期置信度** | 高 |
+| **测试步骤** | 1. get_mdc("S72.0") → MDCI<br>2. get_adrg(MDCI, ["79.35001"]) → ID1<br>3. check_complications(["I63.801"]) → CC<br>4. resolve_drg("ID1", "CC") → ID19 |
+| **预期结果** | drg_result: {"mdc":"MDCI","adrg":"ID1","drg":"ID19","complication":"CC"} |
+
+## 5. 测试数据
+
+### 5.1 病历样本汇总
+
+| 用例编号 | 患者特征 | 主要诊断 | 手术 | 次要诊断 | 预期 DRG |
+|----------|----------|----------|------|----------|----------|
+| TC-N-01 | 男 65岁 | I21.3 急性心梗 | 36.06001 支架 | I10 高血压 | FM29 |
+| TC-N-02 | 女 48岁 | J15.9 肺炎 | 无（回退内科） | 无 | ER35 |
+| TC-N-03 | 男 72岁 | C16.301 胃癌 | 43.7x03 胃切除 | K66.002 肠粘连 | GB29 |
+| TC-N-04 | 女 55岁 | K83.105 胆管狭窄 | 51.6303 胆总管切除 | 无 | HC15 |
+| TC-N-05 | 女 68岁 | M17.9 膝关节炎 | 81.54001 膝置换 | N18.9 CKD | IC39 |
+| TC-N-06 | 男 58岁 | I10 高血压 | 无（回退内科） | E11.9 糖尿病 | FR39 |
+| TC-N-07 | 女 45岁 | K80.0 胆囊炎 | 51.22001 腹腔镜胆囊切除 | 无 | HC25 |
+| TC-N-08 | 男 78岁 | S72.0 股骨骨折 | 79.35001 骨折复位 | I63.801 脑梗死 | ID19 |
+
+### 5.2 预期 DRG 分组映射表
+
+| 预期 DRG | ADRG | 并发症后缀 | 说明 |
+|----------|------|------------|------|
+| FM29 | FM2（经皮心血管介入） | 9（CC） | 心血管外科 + CC |
+| ER35 | ER3（呼吸内科） | 5（NONE） | 呼吸内科 + 无CC |
+| GB29 | GB2（胃、十二指肠大手术） | 9（CC） | 消化道外科 + CC |
+| HC15 | HC1（胆总管手术） | 5（NONE） | 肝胆外科 + 无CC |
+| IC39 | IC3（髋/膝关节置换） | 9（CC） | 骨科外科 + CC |
+| FR39 | FR3（心血管内科） | 9（CC） | 心血管内科 + CC |
+| HC25 | HC2（胆囊切除术） | 5（NONE） | 肝胆外科 + 无CC |
+| ID19 | ID1（骨折切开复位） | 9（CC） | 骨折外科 + CC |
+
+---
+
+*本文档由 TCGen Agent 自动生成，状态为草稿，需人工审核确认。*
+"""
+
+
+_BOUNDARY_TC_TEMPLATE = """| 属性 | 内容 |
+|------|------|
+| **项目名称** | %(project_name)s |
+| **文档类型** | 边界场景测试用例 |
+| **文档版本** | V1.0 |
+| **生成日期** | %(today)s |
+| **生成方式** | AI 自动生成（TCGen Agent） |
+| **状态** | 草稿 |
+| **DRG 版本** | CN-DRG 2018（基于项目内置 MDC/ADRG/CC 查表） |
+
+# %(project_name)s 边界场景测试用例
+
+## 1. 测试概述
+
+### 1.1 测试目标
+
+验证 MedReasonerAgent DRG 入组推理模块在关键变量处于边界条件时的行为。边界条件包括：合并症/并发症的有无（CC/MCC 临界状态）、年龄边界值、多手术组合优先级、性别特异性分组。
+
+### 1.2 边界定义
+
+| 边界类型 | 边界条件 | 预期影响 |
+|----------|----------|----------|
+| 合并症有无 | 添加/移除 CC 编码 → DRG 后缀 5↔9；添加 MCC 编码 → 后缀 9↔1 | DRG 编码发生变化 |
+| 年龄边界 | 17岁 vs 18岁（成年阈值）、新生儿 vs 成人 | 部分 ADRG 按年龄分层 |
+| 多手术组合 | 主要手术 vs 其他手术列表的优先级 | 主要手术决定 ADRG |
+| 性别差异 | MDCM（男性生殖）、MDCN（女性生殖）| 同诊断不同性别可能入不同 MDC |
+
+## 2. 边界条件分析
+
+### 2.1 合并症影响分析
+
+CN-DRG 2018 中，次要诊断决定最终 DRG 的后缀数字：
+- **无合并症（NONE）** → 后缀 5（入组如 GB25、HC15）
+- **一般合并症（CC）** → 后缀 9（入组如 GB29、HC19）
+- **严重合并症（MCC）** → 后缀 1（入组如 GB21、HC11）
+
+边界条件：当次要诊断列表从空变为含 CC 编码，或从含 CC 变为含 MCC 编码时，后缀数字发生变化，对应 DRG 分组改变，进而影响医保支付权重。
+
+### 2.2 年龄边界分析
+
+部分 MDC/ADRG 按患者年龄分层：
+- 新生儿（年龄 < 1 岁）：进入 MDCP（新生儿及其他围产期疾病）
+- 成人阈值（18 岁）：部分 DRG 按成年/未成年区分
+- 老年阈值（60/65 岁）：部分 ADRG 可能涉及年龄加权
+
+当前系统 kg/drg_loader.py 暂未实现年龄分层规则（预留字段），边界测试验证系统能否正确传递年龄信息。
+
+### 2.3 多手术组合影响
+
+当患者其他手术列表包含多个手术时，系统应优先根据主要手术编码匹配 ADRG。当前实现中 get_adrg() 按手术列表顺序（主要手术优先）匹配，取第一个命中结果。
+
+## 3. 测试场景设计
+
+### 3.1 边界场景矩阵
+
+| 场景编号 | 边界类型 | 变化因素 | 基线正常场景 | 预期影响 |
+|----------|----------|----------|--------------|----------|
+| TC-B-01 | 合并症有无 | 添加 CC（K66.002 肠粘连） | TC-N-04（HC15）→ HC19 | DRG 后缀 5→9 |
+| TC-B-02 | 合并症有无 | 添加 MCC（I21.3 急性心梗） | TC-N-04（HC15）→ HC11 | DRG 后缀 5→1 |
+| TC-B-03 | 合并症有无 | 移除 CC（TC-N-03 的 K66.002） | TC-N-03（GB29）→ GB25 | DRG 后缀 9→5 |
+| TC-B-04 | 年龄边界 | 17岁 vs 18岁 | TC-N-01 65岁 → TC-B-04 17岁 | 验证年龄传递 |
+| TC-B-05 | 年龄边界 | 78岁 vs 79岁高龄 | TC-N-08 78岁 → TC-B-05 79岁 | 验证年龄传递 |
+| TC-B-06 | 多手术组合 | 其他手术列表含多个手术 | TC-N-03（仅主要手术）→ 增加其他手术 | 主要手术决定 ADRG |
+| TC-B-07 | 性别差异 | 男性患者（TC-N-05 变体） | TC-N-05 女性 → TC-B-07 男性 | 验证性别传递 |
+
+## 4. 测试用例
+
+### TC-B-01：胆管手术添加 CC（5→9 边界）
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-B-01 |
+| **用例名称** | 胆管手术添加 CC（5→9 边界） |
+| **边界类型** | 合并症有无 |
+| **变化因素** | 次要诊断列表从空变为含 K66.002 肠粘连（CC） |
+| **基线场景** | TC-N-04（HC15：无合并症） |
+| **变化描述** | 在 TC-N-04 基础上添加肠粘连（CC）作为次要诊断 |
+| **输入数据** | ```json\n%(tcb01_json)s\n``` |
+| **预期 DRG 变化** | HC15（无CC）→ HC19（CC），后缀 5→9 |
+| **测试步骤** | 1. get_mdc("K83.105") → MDCH<br>2. get_adrg(MDCH, ["51.6303"]) → HC1<br>3. check_complications(["K66.002"]) → CC<br>4. resolve_drg("HC1", "CC") → HC19 |
+| **预期结果** | drg_result: {"mdc":"MDCH","adrg":"HC1","drg":"HC19","complication":"CC"} |
+
+### TC-B-02：胆管手术添加 MCC（5→1 边界）
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-B-02 |
+| **用例名称** | 胆管手术添加 MCC（5→1 边界） |
+| **边界类型** | 合并症有无 |
+| **变化因素** | 次要诊断从无变为含 I21.3 急性心梗（MCC） |
+| **基线场景** | TC-N-04（HC15：无合并症） |
+| **变化描述** | 在 TC-N-04 基础上添加急性心肌梗死（MCC）作为次要诊断 |
+| **输入数据** | ```json\n%(tcb02_json)s\n``` |
+| **预期 DRG 变化** | HC15（无CC）→ HC11（MCC），后缀 5→1 |
+| **测试步骤** | 1. get_mdc("K83.105") → MDCH<br>2. get_adrg(MDCH, ["51.6303"]) → HC1<br>3. check_complications(["I21.3"]) → MCC（I21.3 在 MCC_SET）<br>4. resolve_drg("HC1", "MCC") → HC11 |
+| **预期结果** | drg_result: {"mdc":"MDCH","adrg":"HC1","drg":"HC11","complication":"MCC"} |
+
+### TC-B-03：胃癌手术移除 CC（9→5 边界）
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-B-03 |
+| **用例名称** | 胃癌手术移除 CC（9→5 边界） |
+| **边界类型** | 合并症有无 |
+| **变化因素** | TC-N-03 的次要诊断列表中移除 K66.002 |
+| **基线场景** | TC-N-03（GB29：有 CC） |
+| **变化描述** | TC-N-03 的次要诊断列表清空，验证无合并症场景 |
+| **输入数据** | ```json\n%(tcb03_json)s\n``` |
+| **预期 DRG 变化** | GB29（CC）→ GB25（无CC），后缀 9→5 |
+| **测试步骤** | 1. get_mdc("C16.301") → MDCG<br>2. get_adrg(MDCG, ["43.7x03"]) → GB2<br>3. check_complications([]) → NONE<br>4. resolve_drg("GB2", "NONE") → GB25 |
+| **预期结果** | drg_result: {"mdc":"MDCG","adrg":"GB2","drg":"GB25","complication":"NONE"} |
+
+### TC-B-04：年龄边界 17岁 vs 18岁
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-B-04 |
+| **用例名称** | 年龄边界 17岁 vs 18岁 |
+| **边界类型** | 年龄边界 |
+| **变化因素** | 将 TC-N-01 的患者年龄从 65岁改为 17岁 |
+| **基线场景** | TC-N-01（65岁男性） |
+| **变化描述** | 验证系统能否正确传递和处理年龄字段（当前系统暂未按年龄分层 ADRG） |
+| **输入数据** | ```json\n%(tcb04_json)s\n``` |
+| **预期 DRG 变化** | 年龄字段正确传递，MDC/ADRG/DRG 与 TC-N-01 一致（系统当前无年龄分层规则） |
+| **测试步骤** | 1. entity._parse_emr() 正确解析年龄字段<br>2. 验证 state["emr_data"]["age"] == 17<br>3. DRG 分组逻辑与 TC-N-01 一致 |
+| **预期结果** | emr_data 中 age 字段正确记录为 17，drg_result 同 TC-N-01 |
+
+### TC-B-05：年龄边界 78岁 vs 79岁高龄
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-B-05 |
+| **用例名称** | 年龄边界 78岁 vs 79岁高龄 |
+| **边界类型** | 年龄边界 |
+| **变化因素** | 将 TC-N-08 的患者年龄从 78岁改为 79岁 |
+| **基线场景** | TC-N-08（78岁男性） |
+| **变化描述** | 验证高龄患者年龄字段处理正确性 |
+| **输入数据** | ```json\n%(tcb05_json)s\n``` |
+| **预期 DRG 变化** | 年龄字段正确传递，MDC/ADRG/DRG 与 TC-N-08 一致 |
+| **测试步骤** | 1. entity._parse_emr() 正确解析年龄字段<br>2. 验证 state["emr_data"]["age"] == 79<br>3. DRG 分组结果同 TC-N-08 |
+| **预期结果** | emr_data 中 age 字段正确记录为 79，drg_result 同 TC-N-08 |
+
+### TC-B-06：多手术组合优先级
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-B-06 |
+| **用例名称** | 多手术组合优先级 |
+| **边界类型** | 多手术组合 |
+| **变化因素** | 在 TC-N-03 基础上，其他手术列表增加胸腔穿刺和肠粘连松解 |
+| **基线场景** | TC-N-03（仅主要手术） |
+| **变化描述** | 增加其他手术列表，验证主要手术决定 ADRG 的优先级规则 |
+| **输入数据** | ```json\n%(tcb06_json)s\n``` |
+| **预期 DRG 变化** | 主要手术 43.7x03 仍决定 ADRG=GB2，与 TC-N-03 一致（不受其他手术影响） |
+| **测试步骤** | 1. get_adrg() 按主要手术 43.7x03 匹配 → GB2<br>2. 其他手术 34.9103 和 54.5903 不影响 ADRG 判定<br>3. check_complications(["K66.002"]) → CC → GB29 |
+| **预期结果** | drg_result: {"mdc":"MDCG","adrg":"GB2","drg":"GB29","complication":"CC"}，与 TC-N-03 一致 |
+
+### TC-B-07：性别差异验证
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-B-07 |
+| **用例名称** | 性别差异验证 |
+| **边界类型** | 性别差异 |
+| **变化因素** | 将 TC-N-05 的患者性别从女改为男，年龄从 68岁改为 65岁 |
+| **基线场景** | TC-N-05（65岁女性） |
+| **变化描述** | 验证系统正确传递和处理性别字段 |
+| **输入数据** | ```json\n%(tcb07_json)s\n``` |
+| **预期 DRG 变化** | 性别字段正确传递，M17.9 → MDCI（骨骼肌肉），与 TC-N-05 DRG 分组一致 |
+| **测试步骤** | 1. entity._parse_emr() 正确解析性别字段<br>2. 验证 state["emr_data"]["gender"] == "男"<br>3. DRG 分组结果同 TC-N-05 |
+| **预期结果** | emr_data 中 gender 字段正确记录为"男"，drg_result 同 TC-N-05 |
+
+## 5. 测试数据
+
+### 5.1 边界病历样本
+
+| 用例编号 | 基线 | 变化因素 | 变化后次要诊断 | 预期 DRG 变化 |
+|----------|------|----------|----------------|--------------|
+| TC-B-01 | TC-N-04（HC15） | 添加 K66.002 | K66.002 | HC15→HC19 |
+| TC-B-02 | TC-N-04（HC15） | 添加 I21.3 | I21.3 | HC15→HC11 |
+| TC-B-03 | TC-N-03（GB29） | 移除 K66.002 | 空 | GB29→GB25 |
+| TC-B-04 | TC-N-01 | 年龄 65→17 | 同 TC-N-01 | 年龄字段=17 |
+| TC-B-05 | TC-N-08 | 年龄 78→79 | 同 TC-N-08 | 年龄字段=79 |
+| TC-B-06 | TC-N-03 | 增加其他手术 | 同 TC-N-03 + 额外手术 | 与 TC-N-03 一致 |
+| TC-B-07 | TC-N-05 | 性别 女→男 | 同 TC-N-05 | 性别字段="男" |
+
+### 5.2 对比分析表
+
+| 对比项 | TC-B-01 vs TC-N-04 | TC-B-02 vs TC-N-04 | TC-B-03 vs TC-N-03 | TC-B-06 vs TC-N-03 |
+|--------|---------------------|---------------------|---------------------|---------------------|
+| 变化变量 | 次要诊断 +1 | 次要诊断 +1（换 MCC） | 次要诊断 -1 | 其他手术列表 +2 |
+| MDC 变化 | 无 | 无 | 无 | 无 |
+| ADRG 变化 | 无 | 无 | 无 | 无 |
+| DRG 变化 | HC15→HC19 | HC15→HC11 | GB29→GB25 | 无 |
+| 后缀变化 | 5→9 | 5→1 | 9→5 | 无 |
+
+---
+
+*本文档由 TCGen Agent 自动生成，状态为草稿，需人工审核确认。*
+"""
+
+
+_ABNORMAL_TC_TEMPLATE = """| 属性 | 内容 |
+|------|------|
+| **项目名称** | %(project_name)s |
+| **文档类型** | 异常场景测试用例 |
+| **文档版本** | V1.0 |
+| **生成日期** | %(today)s |
+| **生成方式** | AI 自动生成（TCGen Agent） |
+| **状态** | 草稿 |
+| **DRG 版本** | CN-DRG 2018（基于项目内置 MDC/ADRG/CC 查表） |
+
+# %(project_name)s 异常场景测试用例
+
+## 1. 测试概述
+
+### 1.1 测试目标
+
+验证 MedReasonerAgent 的 DRG 入组推理模块在接收无效、不完整或矛盾输入时的降级处理能力。异常场景测试确保系统在遇到各类输入错误时能够给出合理的错误提示或降级响应，而不是崩溃或返回无意义结果。
+
+### 1.2 异常分类
+
+| 异常类型 | 触发条件 | 预期系统行为 |
+|----------|----------|--------------|
+| 编码错误 | ICD 编码不在 MDC_TABLE/ADRG_TABLE/CC/MCC 集合中 | get_mdc() 返回 None，降级到 NLP 模式或返回 N/A |
+| 信息缺失 | 缺少主要诊断、年龄或性别等必填字段 | entity._parse_emr() 返回 None，降级到 NLP 模式 |
+| 逻辑冲突 | 诊断与手术逻辑不匹配（如产科诊断 + 骨科手术） | 可能回退到内科 ADRG 或返回冲突警告 |
+| 格式错误 | JSON 格式错误、字段类型错误 | json.loads() 抛出异常，降级到 NLP 模式 |
+
+## 2. 异常条件分析
+
+### 2.1 编码错误类型
+
+无效 ICD 编码是指不在系统内置查表中的编码：
+- **ICD-10 无效诊断编码**：前缀不匹配 MDC_TABLE 中的任何条目（如 "XXXX.9"、"999.99"）
+- **ICD-9-CM-3 无效手术编码**：前缀不匹配 ADRG_TABLE 中的任何条目，且不在 MEDICAL_ADRG 兜底范围
+
+当 get_mdc() 返回 None 时，entity agent 应降级到 NLP 模式，从自然语言 query 中抽取实体。
+
+### 2.2 信息缺失类型
+
+系统要求以下字段必须存在：
+- 主要诊断.疾病编码：必填，用于 MDC 判定
+- 年龄：系统虽不直接用于 DRG 分组，但需记录到 emr_data
+- 性别：系统虽不直接用于 DRG 分组，但需记录到 emr_data
+
+当 entity._parse_emr() 返回 None 时，entity agent 降级到 NLP 模式，尝试从原始 query 中通过 LLM 抽取实体。
+
+### 2.3 逻辑冲突类型
+
+逻辑冲突指输入在格式上合法，但在医学逻辑上存在不匹配：
+- 产科诊断（MDCO）患者接受骨科手术（MDCI）
+- 消化系统诊断（MDCG）患者接受心血管手术（MDCF）
+- 男性患者的主要诊断为女性生殖系统疾病（MDCN）
+
+当前系统 get_adrg() 按主要手术匹配 ADRG，可能会命中内科兜底或返回外科 ADRG 但与 MDC 不一致。
+
+## 3. 测试场景设计
+
+### 3.1 异常场景矩阵
+
+| 场景编号 | 异常类型 | 触发条件 | 输入示例 | 预期系统行为 |
+|----------|----------|----------|----------|--------------|
+| TC-A-01 | 编码错误 | 无效 ICD-10 诊断编码 "XXXX.9" | JSON 含 "疾病编码": "XXXX.9" | get_mdc() 返回 None，NLP 降级 |
+| TC-A-02 | 编码错误 | 无效 ICD-9-CM-3 手术编码 "999.99" | JSON 含 "手术编码": "999.99" | 回退到内科 ADRG |
+| TC-A-03 | 信息缺失 | 缺少"主要诊断"字段 | JSON 不含"主要诊断"键 | entity._parse_emr() 返回 None，NLP 降级 |
+| TC-A-04 | 信息缺失 | 缺少"年龄"字段 | JSON 含主要诊断但无年龄 | emr_data 中 age=0 或缺失，NLP 降级 |
+| TC-A-05 | 逻辑冲突 | 产科诊断（O80.0）+ 骨科手术（81.54001） | MDCO 诊断 + MDCI 手术 | get_adrg 可能返回不一致结果 |
+| TC-A-06 | 格式错误 | JSON 截断（缺少闭合括号） | 不完整 JSON 字符串 | json.loads() 抛出异常，NLP 降级 |
+| TC-A-07 | 格式错误 | 字段类型错误（年龄="六十八"） | JSON 中年龄为字符串 | json.loads() 可能解析为 str，entity 处理异常 |
+
+## 4. 测试用例
+
+### TC-A-01：无效 ICD-10 诊断编码
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-A-01 |
+| **用例名称** | 无效 ICD-10 诊断编码 |
+| **异常类型** | 编码错误 |
+| **触发条件** | 主要诊断的疾病编码为 "XXXX.9"，不在 MDC_TABLE 中 |
+| **输入数据** | ```json\n%(tca01_json)s\n``` |
+| **预期错误码** | DRG-N/A |
+| **预期错误信息** | 主要诊断 ICD-10 编码不在系统支持范围内 |
+| **预期系统行为** | get_mdc("XXXX.9") → None，降级到 NLP 模式或返回 confidence=0 |
+| **测试步骤** | 1. entity._parse_emr() 解析 JSON → 提取到 icd_codes=["XXXX.9"]<br>2. retrieval agent 调用 get_mdc("XXXX.9") → None<br>3. 系统降级到 NLP 模式，从 query 自然语言抽取实体 |
+| **预期结果** | drg_result: {"mdc":"N/A","adrg":"N/A","drg":"N/A","complication":"N/A","confidence":0.0} |
+
+### TC-A-02：无效 ICD-9-CM-3 手术编码
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-A-02 |
+| **用例名称** | 无效 ICD-9-CM-3 手术编码 |
+| **异常类型** | 编码错误 |
+| **触发条件** | 主要手术编码为 "999.99"，不在 ADRG_TABLE 中，且无内科兜底 |
+| **输入数据** | ```json\n%(tca02_json)s\n``` |
+| **预期错误码** | ADRG-FALLBACK |
+| **预期错误信息** | 主要手术编码不在系统支持范围内，回退到内科 ADRG |
+| **预期系统行为** | get_mdc("K83.105") → MDCH；get_adrg(MDCH, ["999.99"]) → 手术 999.99 不匹配，回退 MEDICAL_ADRG → HR1 |
+| **测试步骤** | 1. get_mdc("K83.105") → MDCH<br>2. 手术 999.99 不匹配 ADRG_TABLE，回退到 MEDICAL_ADRG["MDCH"] → HR1<br>3. check_complications([]) → NONE → HR15 |
+| **预期结果** | drg_result: {"mdc":"MDCH","adrg":"HR1","drg":"HR15","complication":"NONE","reason":["ICD编码999.99不在ADRG_TABLE，回退内科ADRG"]} |
+
+### TC-A-03：缺少主要诊断字段
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-A-03 |
+| **用例名称** | 缺少主要诊断字段 |
+| **异常类型** | 信息缺失 |
+| **触发条件** | JSON 中不包含"主要诊断"键 |
+| **输入数据** | ```json\n%(tca03_json)s\n``` |
+| **预期错误码** | EMR-PARSE-FAIL |
+| **预期错误信息** | 缺少必填字段"主要诊断"，无法进行 DRG 分组 |
+| **预期系统行为** | entity._parse_emr() 检测到缺少主要诊断，返回 None，降级到 NLP 模式 |
+| **测试步骤** | 1. entity._parse_emr() 检测到无"主要诊断"字段 → 返回 None<br>2. entity agent 降级到 NLP 模式<br>3. 从 query 自然语言中抽取实体 |
+| **预期结果** | emr_data 为空字典，entities 由 LLM 从 query 抽取，mode 降级为 NLP |
+
+### TC-A-04：缺少年龄字段
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-A-04 |
+| **用例名称** | 缺少年龄字段 |
+| **异常类型** | 信息缺失 |
+| **触发条件** | JSON 中不包含"年龄"字段 |
+| **输入数据** | ```json\n%(tca04_json)s\n``` |
+| **预期错误码** | EMR-MISSING-AGE |
+| **预期错误信息** | 缺少"年龄"字段，年龄信息设为 0 或默认值 |
+| **预期系统行为** | entity._parse_emr() 解析年龄为 0 或默认值，emr_data["age"]=0，DRG 分组仍正常执行（年龄当前不参与分组逻辑） |
+| **测试步骤** | 1. entity._parse_emr() 解析 JSON，"年龄"字段缺失 → age=0（默认值）<br>2. get_mdc("K80.0") → MDCH<br>3. DRG 分组正常执行 |
+| **预期结果** | emr_data 中 age=0，但 drg_result 正常（HC25），reason 包含"年龄字段缺失，已设为默认值" |
+
+### TC-A-05：产科诊断 + 骨科手术逻辑冲突
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-A-05 |
+| **用例名称** | 产科诊断 + 骨科手术逻辑冲突 |
+| **异常类型** | 逻辑冲突 |
+| **触发条件** | 主要诊断为产科（MDCO），主要手术为骨科（MDCI），MDC 与 ADRG 不匹配 |
+| **输入数据** | ```json\n%(tca05_json)s\n``` |
+| **预期错误码** | MDC-ADRG-MISMATCH |
+| **预期错误信息** | 诊断 MDCO（妊娠分娩）与手术 ADRG（MDCI 骨科）不匹配 |
+| **预期系统行为** | get_mdc("O80.0") → MDCO；get_adrg(MDCO, ["81.54001"]) → 81.54001 不在 MDCO 下，MEDICAL_ADRG["MDCO"] → OR1 |
+| **测试步骤** | 1. get_mdc("O80.0") → MDCO<br>2. get_adrg(MDCO, ["81.54001"]) → 81.54001 不在 MDCO 下，MEDICAL_ADRG["MDCO"] → OR1<br>3. check_complications([]) → NONE → OR15 |
+| **预期结果** | drg_result: {"mdc":"MDCO","adrg":"OR1","drg":"OR15","complication":"NONE","reason":["MDCO诊断与MDCI手术不匹配，回退产科内科ADRG"]} |
+
+### TC-A-06：JSON 格式截断
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-A-06 |
+| **用例名称** | JSON 格式截断 |
+| **异常类型** | 格式错误 |
+| **触发条件** | JSON 字符串缺少闭合括号，无法被 json.loads() 解析 |
+| **输入数据** | ```json\n%(tca06_json)s\n``` |
+| **预期错误码** | JSON-DECODE-ERROR |
+| **预期错误信息** | JSON 格式错误，无法解析电子病历 |
+| **预期系统行为** | json.loads() 抛出 JSONDecodeError，entity agent 降级到 NLP 模式 |
+| **测试步骤** | 1. entity._parse_emr() 调用 json.loads() → JSONDecodeError<br>2. 捕获异常，返回 None<br>3. entity agent 降级到 NLP 模式 |
+| **预期结果** | emr_data 为空字典，mode 降级为 NLP，answer 包含 NLP 分析结果 |
+
+### TC-A-07：字段类型错误（年龄为字符串）
+
+| 属性 | 内容 |
+|------|------|
+| **用例编号** | TC-A-07 |
+| **用例名称** | 字段类型错误（年龄为字符串） |
+| **异常类型** | 格式错误 |
+| **触发条件** | "年龄"字段值为中文字符串"六十八"而非整数 |
+| **输入数据** | ```json\n%(tca07_json)s\n``` |
+| **预期错误码** | EMR-TYPE-ERROR |
+| **预期错误信息** | "年龄"字段类型错误，期望整数 |
+| **预期系统行为** | json.loads() 解析成功（"六十八"作为字符串合法），entity._parse_emr() 处理年龄时类型不匹配，age 被设为 0 或默认值 |
+| **测试步骤** | 1. json.loads() 解析 JSON 成功（年龄为字符串）<br>2. entity._parse_emr() 检查年龄类型 → int(age) 失败 → age=0（默认值）<br>3. DRG 分组正常执行（年龄不参与分组逻辑） |
+| **预期结果** | emr_data 中 age=0，drg_result 正常，reason 包含"年龄字段类型错误，已设为默认值" |
+
+## 5. 测试数据
+
+### 5.1 异常病历样本
+
+| 用例编号 | 异常类型 | 错误字段 | 错误值 | 预期处理结果 |
+|----------|----------|----------|--------|--------------|
+| TC-A-01 | 编码错误 | 主要诊断.疾病编码 | XXXX.9 | get_mdc() → None，NLP 降级 |
+| TC-A-02 | 编码错误 | 主要手术.手术编码 | 999.99 | 回退到内科 ADRG（HR1） |
+| TC-A-03 | 信息缺失 | 无"主要诊断"键 | - | _parse_emr() → None，NLP 降级 |
+| TC-A-04 | 信息缺失 | 无"年龄"字段 | - | age=0，DRG 正常执行 |
+| TC-A-05 | 逻辑冲突 | MDCO + MDCI 不匹配 | O80.0 + 81.54001 | 回退到 MDCO 内科 OR1 |
+| TC-A-06 | 格式错误 | JSON 截断 | 不完整 JSON | JSONDecodeError，NLP 降级 |
+| TC-A-07 | 格式错误 | 年龄类型错误 | "六十八" | age=0，DRG 正常执行 |
+
+### 5.2 错误处理验证表
+
+| 异常场景 | 检测点 | 检测函数 | 预期返回值 | 备选路径 |
+|----------|--------|----------|------------|----------|
+| 无效 ICD-10 | MDC 匹配 | kg/drg_loader.get_mdc() | None | entity agent → NLP 模式 |
+| 无效 ICD-9-CM-3 | ADRG 匹配 | kg/drg_loader.get_adrg() | MEDICAL_ADRG 兜底 | 正常返回内科 ADRG |
+| 缺少主要诊断 | EMR 解析 | entity._parse_emr() | None | entity agent → NLP 模式 |
+| 缺少年龄 | EMR 解析 | entity._parse_emr() | age=0 | 继续 DRG 分组（年龄不参与） |
+| MDC/ADRG 不匹配 | ADRG 回退 | kg/drg_loader.get_adrg() | MEDICAL_ADRG[mdc] | 回退到内科 ADRG |
+| JSON 格式错误 | JSON 解析 | json.loads() | JSONDecodeError | entity agent → NLP 模式 |
+| 字段类型错误 | 年龄处理 | entity._parse_emr() | age=0（默认值） | 继续 DRG 分组 |
+
+---
+
+*本文档由 TCGen Agent 自动生成，状态为草稿，需人工审核确认。*
+"""
 
 
 def _offline_requirements_doc(prompt: str) -> str:

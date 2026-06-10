@@ -1,5 +1,9 @@
+from datetime import date
+
 from tools.llm import call_llm
 from tools.trace import append_trace
+
+TODAY = date.today().isoformat()
 
 
 def doc_composer_agent(state):
@@ -37,7 +41,7 @@ def _summarize_modules(modules: list) -> str:
     return "\n".join(lines[:50])
 
 
-def _requirements_prompt(project_name: str, language: str, context: dict, modules: str, code: dict) -> str:
+def _requirements_prompt(project_name: str, language: str, context: dict, modules: str, code: dict, generated_date: str = TODAY) -> str:
     is_zh = language == "zh"
     spec_ref = (
         "请严格参照 docs/doc_spec.md 中「需求分析文档格式」章节规定的结构生成。"
@@ -49,6 +53,7 @@ def _requirements_prompt(project_name: str, language: str, context: dict, module
 You are a technical writer generating a requirements analysis document.
 
 Project: {project_name}
+Generated date: {generated_date}
 Description: {context.get('project_description', 'A software system')}
 
 Available context:
@@ -90,7 +95,7 @@ Content per section:
 - ## 8. 约束与假设: 技术约束、业务约束、假设条件
 
 Format requirements:
-- Include the meta information table at the top: | 属性 | 内容 | with 项目名称, 文档类型, 文档版本, 生成日期, 生成方式, 状态
+- Include the meta information table at the top: | 属性 | 内容 | with 项目名称, 文档类型, 文档版本, 生成日期 ({generated_date}), 生成方式, 状态
 - Use Markdown tables where appropriate
 - Each functional requirement must have a unique FR-XX number (FR-01, FR-02, ...)
 - Use case tables must include: number, name, actor, preconditions, trigger, main flow
@@ -104,7 +109,7 @@ Document title: # {project_name} 需求分析文档
 """
 
 
-def _architecture_prompt(project_name: str, language: str, context: dict, modules: str, code: dict) -> str:
+def _architecture_prompt(project_name: str, language: str, context: dict, modules: str, code: dict, generated_date: str = TODAY) -> str:
     is_zh = language == "zh"
     spec_ref = (
         "请严格参照 docs/doc_spec.md 中「架构设计文档格式」章节规定的结构生成。"
@@ -116,6 +121,7 @@ def _architecture_prompt(project_name: str, language: str, context: dict, module
 You are a software architect generating an architecture design document.
 
 Project: {project_name}
+Generated date: {generated_date}
 Description: {context.get('project_description', 'A software system')}
 
 Architecture overview:
@@ -156,6 +162,7 @@ Content per section:
 - ## 7. 安全设计: 安全边界、数据保护策略
 
 Format requirements:
+- Include the meta information table at the top: | 属性 | 内容 | with 项目名称, 文档类型, 文档版本, 生成日期 ({generated_date}), 生成方式, 状态
 - Include ASCII architecture diagram showing at least 3 layers
 - API table format: method | path | request | response | description
 - Technology selection table: technology | choice | reason | alternative
@@ -166,7 +173,7 @@ Document title: # {project_name} 架构设计文档
 """
 
 
-def _testing_prompt(project_name: str, language: str, context: dict, modules: str, code: dict) -> str:
+def _testing_prompt(project_name: str, language: str, context: dict, modules: str, code: dict, generated_date: str = TODAY) -> str:
     is_zh = language == "zh"
     spec_ref = (
         "请严格参照 docs/doc_spec.md 中「测试文档格式」章节规定的结构生成。"
@@ -178,6 +185,7 @@ def _testing_prompt(project_name: str, language: str, context: dict, modules: st
 You are a QA engineer generating a test plan document.
 
 Project: {project_name}
+Generated date: {generated_date}
 Description: {context.get('project_description', 'A software system')}
 
 Architecture overview:
@@ -215,6 +223,7 @@ Content per section:
 - ## 7. 缺陷管理: P0/P1/P2/P3 四级缺陷等级定义、跟踪流程
 
 Format requirements:
+- Include the meta information table at the top: | 属性 | 内容 | with 项目名称, 文档类型, 文档版本, 生成日期 ({generated_date}), 生成方式, 状态
 - Each test case must have a unique TC-XX number
 - Acceptance criteria must use checkbox format: - [ ] item
 - Coverage target must be quantified (e.g., ">= 80%")
