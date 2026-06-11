@@ -2,7 +2,7 @@
 
 import {
   Bot, FileText, FileCode, ClipboardCheck, Loader2,
-  CheckCircle2, XCircle, AlertTriangle,
+  CheckCircle2, XCircle, AlertTriangle, ExternalLink, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { useState } from "react";
 import { useTraceStore } from "../store/traceStore";
@@ -77,6 +77,7 @@ export default function DocGenPanel() {
 
   // Local state only for UI that truly needs ephemeral state
   const [selectedDocType, setSelectedDocType] = useState<DocType | null>(null);
+  const [pdfDrawerOpen, setPdfDrawerOpen] = useState(true);
 
   const language = useTraceStore((state) => state.language);
   const isZh = language === "zh";
@@ -87,6 +88,7 @@ export default function DocGenPanel() {
     setDocGenError(null);
     setDocGenResult(null);
     setDocGenCompletedSteps(0);
+    setPdfDrawerOpen(true);
 
     const isTesting = docType === "testing";
     const endpoint = isTesting ? `${API_BASE}/testing/generate-doc` : `${API_BASE}/docgen/generate`;
@@ -118,8 +120,9 @@ export default function DocGenPanel() {
         });
         if (!r1.ok) throw new Error(`${r1.status}: ${await r1.text()}`);
         const d1 = await r1.json();
+        const rendered = await renderPdfForResult(d1, docType);
         setDocGenCompletedSteps(2);
-        setDocGenResult(d1);
+        setDocGenResult(rendered as any);
         setDocGenCompletedSteps(3);
       } else {
         const response = await fetch(endpoint, {
@@ -129,7 +132,8 @@ export default function DocGenPanel() {
         });
         if (!response.ok) throw new Error(`Generate failed: ${response.status}`);
         const data = await response.json();
-        setDocGenResult(data);
+        const rendered = await renderPdfForResult(data, docType);
+        setDocGenResult(rendered as any);
         setDocGenCompletedSteps(3);
       }
     } catch (err) {
@@ -273,6 +277,37 @@ export default function DocGenPanel() {
 
           {docgenResult.review_report ? (
             <ReviewCard report={docgenResult.review_report as ReviewReport} isZh={isZh} />
+          ) : null}
+
+          {docgenResult.pdf_url ? (
+            <div className={`pdf-preview ${pdfDrawerOpen ? "" : "collapsed"}`}>
+              <div className="pdf-preview-header">
+                <h3>{isZh ? "PDF 预览" : "PDF Preview"}</h3>
+                <div className="pdf-actions">
+                  <button
+                    type="button"
+                    className="pdf-toggle"
+                    onClick={() => setPdfDrawerOpen((open) => !open)}
+                    aria-expanded={pdfDrawerOpen}
+                  >
+                    {pdfDrawerOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    {pdfDrawerOpen ? (isZh ? "收起" : "Collapse") : (isZh ? "打开预览" : "Open Preview")}
+                  </button>
+                  <a href={pdfUrl(docgenResult.pdf_url)} target="_blank" rel="noreferrer">
+                    <ExternalLink size={14} />
+                    {isZh ? "打开 PDF" : "Open PDF"}
+                  </a>
+                </div>
+              </div>
+              {pdfDrawerOpen ? (
+                <>
+                  <iframe src={pdfSrc(docgenResult.pdf_url)} title="Document PDF preview" />
+                  <div className="pdf-fallback">
+                    {isZh ? "如果预览区域为空，请点击右上角“打开 PDF”。" : "If the preview is blank, use Open PDF."}
+                  </div>
+                </>
+              ) : null}
+            </div>
           ) : null}
 
           <div className="doc-preview">
@@ -464,6 +499,65 @@ export default function DocGenPanel() {
           background: var(--panel);
         }
         .doc-preview-content { padding: 14px; }
+        .pdf-preview {
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          background: var(--panel);
+          overflow: hidden;
+        }
+        .pdf-preview-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 10px 14px;
+          border-bottom: 1px solid var(--border);
+        }
+        .pdf-preview h3 {
+          margin: 0;
+          font-size: 13px;
+        }
+        .pdf-actions {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .pdf-preview a,
+        .pdf-toggle {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          background: #fff;
+          padding: 4px 9px;
+          color: var(--text);
+          font-size: 12px;
+          font-weight: 700;
+          text-decoration: none;
+          cursor: pointer;
+        }
+        .pdf-preview a:hover,
+        .pdf-toggle:hover {
+          background: #eef1f5;
+        }
+        .pdf-preview.collapsed {
+          background: #fafbfc;
+        }
+        .pdf-preview iframe {
+          width: 100%;
+          height: 640px;
+          border: 0;
+          display: block;
+          background: #f8fafc;
+        }
+        .pdf-fallback {
+          padding: 8px 14px;
+          border-top: 1px solid var(--border);
+          color: var(--muted);
+          font-size: 12px;
+          background: #fafbfc;
+        }
 
         /* review card */
         .review-card {
@@ -578,6 +672,31 @@ function ReviewCard({ report, isZh }: { report: ReviewReport; isZh: boolean }) {
       </div>
     </div>
   );
+}
+
+async function renderPdfForResult(result: Record<string, unknown>, docType: DocType) {
+  const response = await fetch(`${API_BASE}/docgen/render`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      storage_path: result.storage_path || "",
+      content: result.storage_path ? "" : result.doc_final || "",
+      output_name: `MedReasonerAgent_${docType}_preview`,
+    }),
+  });
+  if (!response.ok) {
+    return result;
+  }
+  const rendered = await response.json();
+  return { ...result, ...rendered };
+}
+
+function pdfSrc(url: string) {
+  return `${pdfUrl(url)}#toolbar=1&navpanes=0&view=FitH`;
+}
+
+function pdfUrl(url: string) {
+  return url.startsWith("http") ? url : `${API_BASE}${url}`;
 }
 
 function MetaItem({

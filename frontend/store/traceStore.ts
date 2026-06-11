@@ -42,6 +42,8 @@ type DocGenResult = {
   doc_final: string;
   doc_type: string;
   storage_path: string;
+  pdf_url?: string;
+  pdf_path?: string;
   review_report: Record<string, unknown>;
   test_meta?: TestMeta;
 } | null;
@@ -51,6 +53,8 @@ type TCGenResult = {
   tc_final: string;
   tc_type: string;
   storage_path: string;
+  pdf_url?: string;
+  pdf_path?: string;
   review_report: Record<string, unknown>;
 } | null;
 
@@ -259,8 +263,7 @@ function nodeTitle(node: string) {
 function formatUserMessage(event: TraceEvent, language: "zh" | "en") {
   const selected = event.selected_option ?? event.selected_tool;
   const title = nodeTitle(event.node ?? "");
-  const output = stringifyOutput(event.output);
-  const shortOutput = output.length > 260 ? `${output.slice(0, 260)}...` : output;
+  const shortOutput = summarizeOutput(event.output, event.node, language);
   if (language === "en") {
     return [
       `**${title}** completed this step${selected ? ` using **${selected}**` : ""}.`,
@@ -279,7 +282,7 @@ function formatUserMessage(event: TraceEvent, language: "zh" | "en") {
 
 function formatInternalDetails(event: TraceEvent, language: "zh" | "en") {
   const selected = event.selected_tool ? `Selected tool: ${event.selected_tool}\n\n` : "";
-  const output = stringifyOutput(event.output);
+  const output = formatFullOutput(event.output);
   const context = summarizeState(event.state);
   const label = language === "zh" ? "Agent 间传递的上下文" : "Context passed between agents";
   return `${selected}${output}${context ? `\n\n${label}:\n${context}` : ""}`;
@@ -336,9 +339,58 @@ function stringifyOutput(output: unknown) {
     return "No output.";
   }
   if (typeof output === "string") {
-    return output;
+    return normalizeEscapedText(output);
   }
   return JSON.stringify(output, null, 2);
+}
+
+function summarizeOutput(output: unknown, node: string | undefined, language: "zh" | "en") {
+  if (output === undefined || output === null) {
+    return language === "zh" ? "无输出。" : "No output.";
+  }
+  if (node === "treatment_plan" && isRecord(output)) {
+    const parts: string[] = [];
+    const options = asStringList(output.options);
+    const warnings = asStringList(output.warnings);
+    if (output.drg_code) parts.push(`DRG: ${String(output.drg_code)}`);
+    if (options.length) parts.push(`${language === "zh" ? "方案" : "Options"}: ${options.slice(0, 2).join("；")}`);
+    if (output.confidence) parts.push(`${language === "zh" ? "置信度" : "Confidence"}: ${String(output.confidence)}`);
+    if (warnings.length) parts.push(`${language === "zh" ? "提示" : "Warnings"}: ${warnings.slice(0, 1).join("；")}`);
+    if (parts.length) return clipText(parts.join("\n"));
+  }
+  if (isRecord(output)) {
+    const preferred = ["drg", "mdc", "adrg", "confidence", "summary", "warning", "text"];
+    const lines = preferred
+      .filter((key) => output[key] !== undefined)
+      .map((key) => `${key}: ${compactValue(output[key])}`);
+    return clipText(lines.length ? lines.join("\n") : JSON.stringify(output, null, 2));
+  }
+  return clipText(stringifyOutput(output));
+}
+
+function formatFullOutput(output: unknown) {
+  if (isRecord(output) || Array.isArray(output)) {
+    return `\`\`\`json\n${JSON.stringify(output, null, 2)}\n\`\`\``;
+  }
+  return stringifyOutput(output);
+}
+
+function normalizeEscapedText(text: string) {
+  return text.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"');
+}
+
+function clipText(text: string, max = 320) {
+  const normalized = normalizeEscapedText(text).trim();
+  return normalized.length > max ? `${normalized.slice(0, max)}...` : normalized;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asStringList(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => (typeof item === "string" ? item : JSON.stringify(item))).filter(Boolean);
 }
 
 function summarizeState(state?: Record<string, unknown>) {
@@ -353,7 +405,7 @@ function summarizeState(state?: Record<string, unknown>) {
 }
 
 function compactValue(value: unknown) {
-  const text = typeof value === "string" ? value : JSON.stringify(value);
+  const text = typeof value === "string" ? normalizeEscapedText(value) : JSON.stringify(value);
   if (!text) {
     return "";
   }

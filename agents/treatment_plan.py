@@ -1,4 +1,5 @@
 import json
+import re
 from tools.llm import call_llm
 from tools.trace import append_trace
 
@@ -43,11 +44,44 @@ Return structured JSON in {language}.
 """
 
     result = call_llm(prompt)
-    plan = {
-        "text": result,
-        "warning": "For clinical decision support only; confirm with licensed professionals.",
-        "drg_code": drg.get("drg", "") if drg else "",
-    }
+    parsed = _parse_json_object(result)
+    if parsed:
+        plan = {
+            "options": parsed.get("options", []),
+            "drug_candidates": parsed.get("drug_candidates", []),
+            "mechanism": parsed.get("mechanism") or parsed.get("mechanism_explanation", ""),
+            "confidence": parsed.get("confidence", ""),
+            "warnings": parsed.get("warnings", []),
+            "raw": parsed,
+            "warning": "For clinical decision support only; confirm with licensed professionals.",
+            "drg_code": drg.get("drg", "") if drg else "",
+        }
+    else:
+        plan = {
+            "text": result,
+            "warning": "For clinical decision support only; confirm with licensed professionals.",
+            "drg_code": drg.get("drg", "") if drg else "",
+        }
     state["treatment_plan"] = plan
     append_trace(state, "treatment_plan", plan)
     return state
+
+
+def _parse_json_object(text: str) -> dict | None:
+    """Parse a model JSON object, including common fenced-code responses."""
+    text = text.strip()
+    candidates = [text]
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+    if fenced:
+        candidates.insert(0, fenced.group(1))
+    braced = re.search(r"(\{.*\})", text, flags=re.DOTALL)
+    if braced:
+        candidates.append(braced.group(1))
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None

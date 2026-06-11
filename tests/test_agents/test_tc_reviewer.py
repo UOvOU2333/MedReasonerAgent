@@ -193,7 +193,7 @@ class TestTcReviewerAgent:
     def test_enough_tc_cases(self):
         doc = (
             "| **项目名称** | T |\n# Test\n"
-            + "\n".join(f"TC-N-{i}: case {i}" for i in range(1, 8))
+            + "\n".join(f"TC-N-{i}: case {i}" for i in range(1, 9))
         )
         result = self._run(doc, tc_type="normal")
         chk = next(c for c in result["review_report"]["checks"] if c["check"] == "CHK-09")
@@ -208,11 +208,16 @@ class TestTcReviewerAgent:
     # ── Overall ──────────────────────────────────────────────────────
     def test_all_pass(self):
         doc = (
+            "| 属性 | 内容 |\n"
+            "|------|------|\n"
             "| **项目名称** | Test |\n"
+            "| **文档类型** | 正常场景测试用例 |\n"
+            "| **文档版本** | V1.0 |\n"
+            "| **生成方式** | AI 自动生成 |\n"
             "# 测试用例文档\n"
             "## 1. 测试概述\n\n## 2. DRG 分组规则摘要\n"
             "## 3. 测试场景设计\n\n## 4. 测试用例\n\n## 5. 测试数据\n"
-            + "\n".join(f"TC-N-{i}: case {i}" for i in range(1, 8))
+            + "\n".join(f"TC-N-{i}: case {i}" for i in range(1, 9))
             + "\n" + "\n```json\n{}\n```\n" * 6
             + "\n*本文档由 TCGen Agent 自动生成，状态为草稿，需人工审核确认。*"
         )

@@ -1,6 +1,9 @@
 "use client";
 
-import { Bot, FlaskConical, AlertTriangle, Bug, Download, Loader2, CheckCircle2, XCircle, AlertTriangle as AlertIcon } from "lucide-react";
+import {
+  Bot, FlaskConical, AlertTriangle, Bug, Download, Loader2, CheckCircle2,
+  XCircle, AlertTriangle as AlertIcon, ExternalLink, ChevronDown, ChevronUp,
+} from "lucide-react";
 import { useState } from "react";
 import { useTraceStore } from "../store/traceStore";
 import { API_BASE } from "../lib/api";
@@ -21,6 +24,22 @@ type ReviewReport = {
   total_count: number;
   checks: ReviewCheck[];
   summary: string;
+};
+
+type ReplayCase = {
+  index: number;
+  expected: Record<string, unknown>;
+  actual: Record<string, unknown>;
+  passed: boolean;
+  error: string;
+};
+
+type ReplayReport = {
+  total: number;
+  passed: number;
+  failed: number;
+  pass_rate: number;
+  cases: ReplayCase[];
 };
 
 const tcTypeInfo: Record<
@@ -61,6 +80,9 @@ export default function TCGenPanel() {
 
   // Local state only for which card is active (ephemeral UI state)
   const [selectedTCType, setSelectedTCType] = useState<TCType | null>(null);
+  const [replayReport, setReplayReport] = useState<ReplayReport | null>(null);
+  const [replaying, setReplaying] = useState(false);
+  const [pdfDrawerOpen, setPdfDrawerOpen] = useState(true);
 
   const language = useTraceStore((state) => state.language);
   const isZh = language === "zh";
@@ -70,6 +92,8 @@ export default function TCGenPanel() {
     setTCGenGenerating(true);
     setTCGenError(null);
     setTCGenResult(null);
+    setReplayReport(null);
+    setPdfDrawerOpen(true);
 
     const queryMap: Record<TCType, string> = {
       normal: isZh ? "生成正常场景测试用例" : "Generate normal scenario test cases",
@@ -94,7 +118,8 @@ export default function TCGenPanel() {
         throw new Error(`Generate failed: ${response.status}`);
       }
       const data = await response.json();
-      setTCGenResult(data);
+      const rendered = await renderPdfForResult(data, tcType);
+      setTCGenResult(rendered as any);
     } catch (err) {
       setTCGenError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -117,6 +142,25 @@ export default function TCGenPanel() {
     a.download = `MedReasonerAgent_${tcTypeToFile[tcType] || tcType}_V1.0.md`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function runReplay() {
+    if (!tcgenResult?.storage_path) return;
+    setReplaying(true);
+    setTCGenError(null);
+    try {
+      const response = await fetch(`${API_BASE}/testing/replay-doc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storage_path: tcgenResult.storage_path }),
+      });
+      if (!response.ok) throw new Error(`Replay failed: ${response.status}`);
+      setReplayReport(await response.json());
+    } catch (err) {
+      setTCGenError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setReplaying(false);
+    }
   }
 
   const reviewPassed = tcgenResult?.review_report
@@ -178,6 +222,10 @@ export default function TCGenPanel() {
             <button className="download-btn" onClick={downloadTC} title={isZh ? "下载测试用例" : "Download test cases"}>
               <Download size={16} /> {isZh ? "下载 .md" : "Download .md"}
             </button>
+            <button className="download-btn" onClick={runReplay} disabled={replaying || !tcgenResult.storage_path}>
+              {replaying ? <Loader2 size={16} className="spin" /> : null}
+              {isZh ? "真实入组回放" : "Replay DRG"}
+            </button>
           </div>
 
           {tcgenResult.storage_path ? (
@@ -192,6 +240,39 @@ export default function TCGenPanel() {
               isZh={isZh}
             />
           ) : null}
+
+          {tcgenResult.pdf_url ? (
+            <div className={`pdf-preview ${pdfDrawerOpen ? "" : "collapsed"}`}>
+              <div className="pdf-preview-header">
+                <h3>{isZh ? "PDF 预览" : "PDF Preview"}</h3>
+                <div className="pdf-actions">
+                  <button
+                    type="button"
+                    className="pdf-toggle"
+                    onClick={() => setPdfDrawerOpen((open) => !open)}
+                    aria-expanded={pdfDrawerOpen}
+                  >
+                    {pdfDrawerOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    {pdfDrawerOpen ? (isZh ? "收起" : "Collapse") : (isZh ? "打开预览" : "Open Preview")}
+                  </button>
+                  <a href={pdfUrl(tcgenResult.pdf_url)} target="_blank" rel="noreferrer">
+                    <ExternalLink size={14} />
+                    {isZh ? "打开 PDF" : "Open PDF"}
+                  </a>
+                </div>
+              </div>
+              {pdfDrawerOpen ? (
+                <>
+                  <iframe src={pdfSrc(tcgenResult.pdf_url)} title="Test case PDF preview" />
+                  <div className="pdf-fallback">
+                    {isZh ? "如果预览区域为空，请点击右上角“打开 PDF”。" : "If the preview is blank, use Open PDF."}
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+
+          {replayReport ? <ReplayCard report={replayReport} isZh={isZh} /> : null}
 
           <div className="tc-preview">
             <h3>{isZh ? "测试用例预览" : "Test Case Preview"}</h3>
@@ -321,6 +402,10 @@ export default function TCGenPanel() {
         .download-btn:hover {
           background: #eef1f5;
         }
+        .download-btn:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
         .storage-info {
           font-size: 13px;
           color: var(--muted);
@@ -422,6 +507,104 @@ export default function TCGenPanel() {
         .tc-preview-content {
           padding: 14px;
         }
+        .pdf-preview {
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          background: var(--panel);
+          overflow: hidden;
+        }
+        .pdf-preview-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 10px 14px;
+          border-bottom: 1px solid var(--border);
+        }
+        .pdf-preview h3 {
+          margin: 0;
+          font-size: 13px;
+        }
+        .pdf-actions {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .pdf-preview a,
+        .pdf-toggle {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          background: #fff;
+          padding: 4px 9px;
+          color: var(--text);
+          font-size: 12px;
+          font-weight: 700;
+          text-decoration: none;
+          cursor: pointer;
+        }
+        .pdf-preview a:hover,
+        .pdf-toggle:hover {
+          background: #eef1f5;
+        }
+        .pdf-preview.collapsed {
+          background: #fafbfc;
+        }
+        .pdf-preview iframe {
+          width: 100%;
+          height: 640px;
+          border: 0;
+          display: block;
+          background: #f8fafc;
+        }
+        .pdf-fallback {
+          padding: 8px 14px;
+          border-top: 1px solid var(--border);
+          color: var(--muted);
+          font-size: 12px;
+          background: #fafbfc;
+        }
+        .replay-card {
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          background: var(--panel);
+          overflow: hidden;
+        }
+        .replay-header {
+          display: flex;
+          justify-content: space-between;
+          padding: 12px 14px;
+          border-bottom: 1px solid var(--border);
+          background: #fafbfc;
+          font-size: 13px;
+          font-weight: 700;
+        }
+        .replay-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 12px;
+        }
+        .replay-table th,
+        .replay-table td {
+          border-bottom: 1px solid #eef1f5;
+          padding: 8px 10px;
+          text-align: left;
+          vertical-align: top;
+        }
+        .replay-table th {
+          color: var(--muted);
+          background: #fbfcfd;
+        }
+        .replay-pass {
+          color: #1f8a4c;
+          font-weight: 700;
+        }
+        .replay-fail {
+          color: #dc2626;
+          font-weight: 700;
+        }
       `}</style>
     </section>
   );
@@ -481,4 +664,73 @@ function ReviewCard({ report, isZh }: { report: ReviewReport; isZh: boolean }) {
       </div>
     </div>
   );
+}
+
+function ReplayCard({ report, isZh }: { report: ReplayReport; isZh: boolean }) {
+  return (
+    <div className="replay-card">
+      <div className="replay-header">
+        <span>{isZh ? "真实入组回放结果" : "DRG Replay Results"}</span>
+        <span>
+          {report.passed}/{report.total} {isZh ? "通过" : "passed"} ({report.pass_rate}%)
+        </span>
+      </div>
+      <table className="replay-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>{isZh ? "实际 DRG" : "Actual DRG"}</th>
+            <th>{isZh ? "期望 DRG" : "Expected DRG"}</th>
+            <th>{isZh ? "状态" : "Status"}</th>
+            <th>{isZh ? "说明" : "Message"}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {report.cases.map((item) => (
+            <tr key={item.index}>
+              <td>{item.index}</td>
+              <td>{formatDrg(item.actual)}</td>
+              <td>{formatDrg(item.expected)}</td>
+              <td className={item.passed ? "replay-pass" : "replay-fail"}>
+                {item.passed ? (isZh ? "通过" : "PASS") : isZh ? "失败" : "FAIL"}
+              </td>
+              <td>{item.error || "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+async function renderPdfForResult(result: Record<string, unknown>, tcType: TCType) {
+  const response = await fetch(`${API_BASE}/docgen/render`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      storage_path: result.storage_path || "",
+      content: result.storage_path ? "" : result.tc_final || "",
+      output_name: `MedReasonerAgent_${tcType}_preview`,
+    }),
+  });
+  if (!response.ok) {
+    return result;
+  }
+  const rendered = await response.json();
+  return { ...result, ...rendered };
+}
+
+function pdfSrc(url: string) {
+  return `${pdfUrl(url)}#toolbar=1&navpanes=0&view=FitH`;
+}
+
+function pdfUrl(url: string) {
+  return url.startsWith("http") ? url : `${API_BASE}${url}`;
+}
+
+function formatDrg(value: Record<string, unknown>) {
+  const parts = ["mdc", "adrg", "drg", "complication"]
+    .filter((key) => value?.[key] !== undefined)
+    .map((key) => `${key.toUpperCase()}: ${String(value[key])}`);
+  return parts.length ? parts.join(" / ") : "-";
 }

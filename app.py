@@ -6,12 +6,17 @@ import os
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from graph.workflow import build_graph, build_docgen_graph, build_tcgen_graph, build_vdoc_graph
 from runtime.event_bus import event_bus
+from agents.entity import _parse_emr
+from agents.retrieval import _do_drg_grouping
+from tools.document_renderer import render_markdown_pdf, rendered_pdf_path, resolve_generated_path
+from tools.document_replay import compare_drg_result, extract_json_cases
 
 app = FastAPI()
 app.add_middleware(
@@ -36,6 +41,16 @@ class RunRequest(BaseModel):
     doc_type: str = ""  # requirements | architecture | testing (docgen 专用)
     tc_type: str = ""   # normal | boundary | abnormal (tcgen 专用)
     project_name: str = "MedReasonerAgent"
+
+
+class RenderRequest(BaseModel):
+    storage_path: str = ""
+    content: str = ""
+    output_name: str = "document"
+
+
+class ReplayDocRequest(BaseModel):
+    storage_path: str
 
 
 def normalize_language(language: str | None) -> str:
@@ -423,6 +438,41 @@ def list_documents():
     return {"documents": [], "last_updated": ""}
 
 
+@app.post("/docgen/render")
+def docgen_render(request: RenderRequest):
+    """Render a generated Markdown document to a PDF preview file."""
+    try:
+        result = render_markdown_pdf(
+            markdown_text=request.content or None,
+            storage_path=request.storage_path or None,
+            output_name=request.output_name or "document",
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="document not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    result["pdf_url"] = result["pdf_url"]
+    return result
+
+
+@app.get("/docgen/rendered/{filename}")
+def docgen_rendered(filename: str):
+    """Serve rendered PDF previews from generated_docs/rendered."""
+    try:
+        path = rendered_pdf_path(filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="PDF not found")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=filename,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 # ── 测试执行端点 ──
 @app.get("/testing/run")
 def testing_run():
@@ -445,6 +495,63 @@ def testing_run():
         "exit_code": test_data["exit_code"],
         "by_file": test_data["by_file"],
         "failed_tests": test_data["failed_tests"],
+    }
+
+
+@app.post("/testing/replay-doc")
+def testing_replay_doc(request: ReplayDocRequest):
+    """Extract JSON cases from a generated test document and replay DRG grouping."""
+    try:
+        doc_path = resolve_generated_path(request.storage_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="document not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    content = doc_path.read_text(encoding="utf-8")
+    cases = extract_json_cases(content)
+    results = []
+    for case in cases:
+        item: dict[str, Any] = {
+            "index": case.index,
+            "expected": case.expected,
+            "passed": False,
+            "error": case.error,
+            "actual": {},
+        }
+        if case.emr is None:
+            results.append(item)
+            continue
+        parsed = _parse_emr(json.dumps(case.emr, ensure_ascii=False))
+        if not parsed:
+            item["error"] = "EMR parse failed"
+            results.append(item)
+            continue
+        actual = _do_drg_grouping(parsed)
+        passed, reason = compare_drg_result(actual, case.expected)
+        item.update({
+            "input_emr": case.emr,
+            "actual": {
+                "mdc": actual.get("mdc", ""),
+                "adrg": actual.get("adrg", ""),
+                "drg": actual.get("drg", ""),
+                "complication": actual.get("complication", ""),
+                "confidence": actual.get("confidence", 0),
+            },
+            "passed": passed,
+            "error": reason,
+        })
+        results.append(item)
+
+    total = len(results)
+    passed_count = sum(1 for item in results if item["passed"])
+    return {
+        "storage_path": request.storage_path,
+        "total": total,
+        "passed": passed_count,
+        "failed": total - passed_count,
+        "pass_rate": round(passed_count / total * 100, 1) if total else 0.0,
+        "cases": results,
     }
 
 

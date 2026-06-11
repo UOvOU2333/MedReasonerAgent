@@ -72,7 +72,7 @@ def _update_index(index: dict, doc_name: str, doc_type: str, version: str, filen
     now = datetime.now(timezone.utc).isoformat()
     # 查找是否已存在同名记录
     for doc in index["documents"]:
-        if doc["name"] == doc_name and doc["version"] == version:
+        if doc["name"] == doc_name and doc.get("type") == doc_type and doc["version"] == version:
             doc["updated_at"] = now
             doc["path"] = f"generated_docs/{filename}"
             doc["status"] = "updated"
