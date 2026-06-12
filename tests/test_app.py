@@ -1,6 +1,10 @@
 """Unit tests for FastAPI app endpoints (test client, no server needed)."""
 from __future__ import annotations
 
+import json
+import zipfile
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("langgraph")
@@ -243,6 +247,70 @@ class TestListDocsEndpoint:
     def test_list_docs_returns_list(self, client):
         response = client.get("/docgen/docs")
         assert isinstance(response.json()["documents"], list)
+
+    def test_read_generated_markdown_doc(self, client):
+        root = Path(__file__).resolve().parents[1]
+        generated_dir = root / "generated_docs"
+        generated_dir.mkdir(exist_ok=True)
+        doc_path = generated_dir / "api_preview_test.md"
+        doc_path.write_text("# API Preview\n\ncontent", encoding="utf-8")
+        try:
+            response = client.get("/docgen/docs/api_preview_test.md")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["filename"] == "api_preview_test.md"
+            assert data["path"] == "generated_docs/api_preview_test.md"
+            assert data["size"] > 0
+            assert "# API Preview" in data["content"]
+        finally:
+            doc_path.unlink(missing_ok=True)
+
+    @pytest.mark.parametrize("filename", ["api_preview_test.txt", "..%2Fapp.py"])
+    def test_read_generated_doc_rejects_invalid_filename(self, client, filename):
+        response = client.get(f"/docgen/docs/{filename}")
+        assert response.status_code in (400, 404)
+
+    def test_export_delivery_package_returns_zip(self, client):
+        root = Path(__file__).resolve().parents[1]
+        generated_dir = root / "generated_docs"
+        generated_dir.mkdir(exist_ok=True)
+        index_path = generated_dir / "index.json"
+        old_index = index_path.read_text(encoding="utf-8") if index_path.exists() else None
+        doc_path = generated_dir / "export_package_test.md"
+        doc_path.write_text("# Export Package Test\n\ncontent", encoding="utf-8")
+        index_path.write_text(
+            json.dumps({
+                "documents": [{
+                    "name": "ExportPackageTest",
+                    "type": "requirements",
+                    "version": "V1.0",
+                    "path": "generated_docs/export_package_test.md",
+                    "status": "stored",
+                }],
+                "last_updated": "2026-06-12T00:00:00",
+            }, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        try:
+            response = client.get("/docgen/export-package")
+            assert response.status_code == 200
+            assert response.content.startswith(b"PK")
+            zip_path = generated_dir / "export_package_response.zip"
+            zip_path.write_bytes(response.content)
+            try:
+                with zipfile.ZipFile(zip_path) as zf:
+                    names = set(zf.namelist())
+                    assert "index.json" in names
+                    assert "export_manifest.json" in names
+                    assert "documents/requirements/export_package_test.md" in names
+            finally:
+                zip_path.unlink(missing_ok=True)
+        finally:
+            doc_path.unlink(missing_ok=True)
+            if old_index is None:
+                index_path.unlink(missing_ok=True)
+            else:
+                index_path.write_text(old_index, encoding="utf-8")
 
 
 # =============================================================================

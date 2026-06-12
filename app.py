@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import zipfile
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -438,6 +440,99 @@ def list_documents():
     return {"documents": [], "last_updated": ""}
 
 
+@app.get("/docgen/docs/{filename}")
+def read_generated_document(filename: str):
+    """Read one generated Markdown document for preview."""
+    if filename != os.path.basename(filename) or not filename.endswith(".md"):
+        raise HTTPException(status_code=400, detail="invalid markdown filename")
+
+    docs_dir = os.path.join(os.path.dirname(__file__), "generated_docs")
+    path = os.path.abspath(os.path.join(docs_dir, filename))
+    docs_root = os.path.abspath(docs_dir)
+    if os.path.commonpath([docs_root, path]) != docs_root:
+        raise HTTPException(status_code=400, detail="document path must stay inside generated_docs")
+    if not os.path.exists(path) or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="document not found")
+
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    return {
+        "filename": filename,
+        "path": f"generated_docs/{filename}",
+        "size": os.path.getsize(path),
+        "content": content,
+    }
+
+
+@app.get("/docgen/export-package")
+def export_delivery_package():
+    """Export generated docs, PDFs, index, and replay reports as a delivery ZIP."""
+    generated_dir = Path(__file__).resolve().parent / "generated_docs"
+    index_path = generated_dir / "index.json"
+    if not index_path.exists():
+        raise HTTPException(status_code=404, detail="document index not found")
+
+    with open(index_path, "r", encoding="utf-8") as f:
+        index = json.load(f)
+
+    exports_dir = generated_dir / "exports"
+    exports_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_path = exports_dir / f"MedReasonerAgent_delivery_{timestamp}.zip"
+
+    manifest: dict[str, Any] = {
+        "project": "MedReasonerAgent",
+        "created_at": datetime.now().isoformat(),
+        "documents": [],
+    }
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.write(index_path, "index.json")
+        for doc in index.get("documents", []):
+            storage_path = doc.get("path", "")
+            try:
+                doc_path = resolve_generated_path(storage_path)
+            except (FileNotFoundError, ValueError):
+                continue
+            if doc_path.suffix.lower() != ".md":
+                continue
+
+            doc_type = doc.get("type", "document")
+            doc_folder = f"documents/{doc_type}"
+            zf.write(doc_path, f"{doc_folder}/{doc_path.name}")
+            manifest["documents"].append({
+                "name": doc.get("name", ""),
+                "type": doc_type,
+                "version": doc.get("version", ""),
+                "path": storage_path,
+                "included_markdown": f"{doc_folder}/{doc_path.name}",
+            })
+
+            try:
+                rendered = render_markdown_pdf(storage_path=storage_path, output_name=doc_path.stem)
+                pdf_path = resolve_generated_path(rendered["pdf_path"])
+                zf.write(pdf_path, f"pdf/{pdf_path.name}")
+            except Exception:
+                pass
+
+            if str(doc_type).startswith("tc_"):
+                replay = _build_replay_report(storage_path)
+                replay_name = doc_path.stem + "_replay_report.json"
+                zf.writestr(
+                    f"replay_reports/{replay_name}",
+                    json.dumps(replay, ensure_ascii=False, indent=2),
+                )
+
+        zf.writestr("export_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=zip_path.name,
+        content_disposition_type="attachment",
+    )
+
+
 @app.post("/docgen/render")
 def docgen_render(request: RenderRequest):
     """Render a generated Markdown document to a PDF preview file."""
@@ -501,8 +596,12 @@ def testing_run():
 @app.post("/testing/replay-doc")
 def testing_replay_doc(request: ReplayDocRequest):
     """Extract JSON cases from a generated test document and replay DRG grouping."""
+    return _build_replay_report(request.storage_path)
+
+
+def _build_replay_report(storage_path: str) -> dict[str, Any]:
     try:
-        doc_path = resolve_generated_path(request.storage_path)
+        doc_path = resolve_generated_path(storage_path)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="document not found")
     except ValueError as exc:
@@ -546,7 +645,7 @@ def testing_replay_doc(request: ReplayDocRequest):
     total = len(results)
     passed_count = sum(1 for item in results if item["passed"])
     return {
-        "storage_path": request.storage_path,
+        "storage_path": storage_path,
         "total": total,
         "passed": passed_count,
         "failed": total - passed_count,
