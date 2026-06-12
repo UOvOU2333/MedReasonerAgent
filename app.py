@@ -17,6 +17,8 @@ from graph.workflow import build_graph, build_docgen_graph, build_tcgen_graph, b
 from runtime.event_bus import event_bus
 from agents.entity import _parse_emr
 from agents.retrieval import _do_drg_grouping
+from agents.doc_reviewer import doc_reviewer_agent
+from agents.tc_reviewer import tc_reviewer_agent
 from tools.document_renderer import render_markdown_pdf, rendered_pdf_path, resolve_generated_path
 from tools.document_replay import compare_drg_result, extract_json_cases
 
@@ -436,8 +438,95 @@ def list_documents():
     if os.path.exists(index_path):
         with open(index_path, "r", encoding="utf-8") as f:
             index = json.load(f)
-        return {"documents": index.get("documents", []), "last_updated": index.get("last_updated", "")}
+        documents = [_attach_document_badges(doc) for doc in index.get("documents", [])]
+        return {"documents": documents, "last_updated": index.get("last_updated", "")}
     return {"documents": [], "last_updated": ""}
+
+
+def _attach_document_badges(doc: dict[str, Any]) -> dict[str, Any]:
+    """Attach lightweight acceptance badges for the VDoc console."""
+    enriched = dict(doc)
+    badges: dict[str, Any] = {
+        "content_review": _build_content_review_badge(enriched),
+        "pdf": _build_pdf_badge(enriched),
+    }
+    if str(enriched.get("type", "")).startswith("tc_"):
+        badges["replay"] = _build_replay_badge(enriched)
+    enriched["badges"] = badges
+    return enriched
+
+
+def _build_content_review_badge(doc: dict[str, Any]) -> dict[str, Any]:
+    storage_path = str(doc.get("path", ""))
+    doc_type = str(doc.get("type", ""))
+    try:
+        path = resolve_generated_path(storage_path)
+        content = path.read_text(encoding="utf-8")
+        if doc_type.startswith("tc_"):
+            tc_type = doc_type.replace("tc_", "", 1) or "normal"
+            result = tc_reviewer_agent({
+                "tc_formatted": content,
+                "tc_type": tc_type,
+                "language": "zh",
+                "trace": [],
+            })
+        else:
+            result = doc_reviewer_agent({
+                "doc_formatted": content,
+                "doc_type": doc_type or "requirements",
+                "language": "zh",
+                "trace": [],
+            })
+        report = result.get("review_report", {})
+        passed = bool(report.get("passed"))
+        return {
+            "status": "pass" if passed else "fail",
+            "label": f"内容验收 {report.get('passed_count', 0)}/{report.get('total_count', 0)}",
+            "detail": report.get("summary", ""),
+        }
+    except Exception as exc:
+        return {
+            "status": "fail",
+            "label": "内容验收异常",
+            "detail": str(exc),
+        }
+
+
+def _build_pdf_badge(doc: dict[str, Any]) -> dict[str, Any]:
+    storage_path = str(doc.get("path", ""))
+    try:
+        path = resolve_generated_path(storage_path)
+        rendered_dir = Path(__file__).resolve().parent / "generated_docs" / "rendered"
+        exists = rendered_dir.exists() and any(rendered_dir.glob(f"{path.stem}_*.pdf"))
+        return {
+            "status": "pass" if exists else "pending",
+            "label": "PDF 已生成" if exists else "PDF 未生成",
+            "detail": "点击 PDF 预览可生成并打开" if not exists else "已存在可打开的 PDF 渲染文件",
+        }
+    except Exception as exc:
+        return {
+            "status": "fail",
+            "label": "PDF 异常",
+            "detail": str(exc),
+        }
+
+
+def _build_replay_badge(doc: dict[str, Any]) -> dict[str, Any]:
+    storage_path = str(doc.get("path", ""))
+    try:
+        report = _build_replay_report(storage_path)
+        passed = report.get("failed", 0) == 0 and report.get("total", 0) > 0
+        return {
+            "status": "pass" if passed else "fail",
+            "label": f"回放 {report.get('passed', 0)}/{report.get('total', 0)}",
+            "detail": f"真实入组回放通过率 {report.get('pass_rate', 0)}%",
+        }
+    except Exception as exc:
+        return {
+            "status": "fail",
+            "label": "回放异常",
+            "detail": str(exc),
+        }
 
 
 @app.get("/docgen/docs/{filename}")

@@ -248,6 +248,44 @@ class TestListDocsEndpoint:
         response = client.get("/docgen/docs")
         assert isinstance(response.json()["documents"], list)
 
+    def test_list_docs_attaches_acceptance_badges(self, client):
+        root = Path(__file__).resolve().parents[1]
+        generated_dir = root / "generated_docs"
+        generated_dir.mkdir(exist_ok=True)
+        index_path = generated_dir / "index.json"
+        old_index = index_path.read_text(encoding="utf-8") if index_path.exists() else None
+        doc_path = generated_dir / "badge_test.md"
+        doc_path.write_text(
+            "# Badge Test\n\n| **项目名称** | BadgeTest |\n\n## 1. 引言\n",
+            encoding="utf-8",
+        )
+        index_path.write_text(
+            json.dumps({
+                "documents": [{
+                    "name": "BadgeTest",
+                    "type": "requirements",
+                    "version": "V1.0",
+                    "path": "generated_docs/badge_test.md",
+                    "status": "stored",
+                }],
+                "last_updated": "2026-06-12T00:00:00",
+            }, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        try:
+            response = client.get("/docgen/docs")
+            assert response.status_code == 200
+            document = response.json()["documents"][0]
+            assert "badges" in document
+            assert "content_review" in document["badges"]
+            assert "pdf" in document["badges"]
+        finally:
+            doc_path.unlink(missing_ok=True)
+            if old_index is None:
+                index_path.unlink(missing_ok=True)
+            else:
+                index_path.write_text(old_index, encoding="utf-8")
+
     def test_read_generated_markdown_doc(self, client):
         root = Path(__file__).resolve().parents[1]
         generated_dir = root / "generated_docs"

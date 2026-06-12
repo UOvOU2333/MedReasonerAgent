@@ -15,6 +15,13 @@ type VDocItem = {
   updated_at?: string;
   path: string;
   status: string;
+  badges?: Record<string, VDocBadge>;
+};
+
+type VDocBadge = {
+  status: "pass" | "fail" | "pending" | string;
+  label: string;
+  detail?: string;
 };
 
 type DocsResponse = {
@@ -409,6 +416,18 @@ export default function VDocPanel() {
                 <div><span>更新时间</span><strong>{formatDate(doc.updated_at)}</strong></div>
               </div>
               <div className="doc-path" title={doc.path}>{doc.path}</div>
+              <div className="doc-badges">
+                {badgeList(doc).map((badge) => (
+                  <span
+                    className={`doc-badge ${badge.status}`}
+                    title={badge.detail || badge.label}
+                    key={`${doc.path}-${badge.label}`}
+                  >
+                    {badge.status === "pass" ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
+                    {badge.label}
+                  </span>
+                ))}
+              </div>
               <div className="doc-actions">
                 <button onClick={() => previewPdf(doc)} disabled={pdfLoading}>
                   {pdfLoading && selected?.path === doc.path ? <Loader2 size={14} className="spin" /> : null}
@@ -873,6 +892,40 @@ export default function VDocPanel() {
           text-overflow: ellipsis;
           white-space: nowrap;
         }
+        .doc-badges {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .doc-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          min-height: 24px;
+          border: 1px solid #e2e8f0;
+          border-radius: 999px;
+          background: #f8fafc;
+          color: var(--muted);
+          padding: 3px 8px;
+          font-size: 11px;
+          font-weight: 800;
+          max-width: 100%;
+        }
+        .doc-badge.pass {
+          border-color: #b7e1c5;
+          background: #effaf3;
+          color: #1f8a4c;
+        }
+        .doc-badge.fail {
+          border-color: #fecaca;
+          background: #fef2f2;
+          color: #dc2626;
+        }
+        .doc-badge.pending {
+          border-color: #f1d4b8;
+          background: #fffaf4;
+          color: #c86f1d;
+        }
         .doc-actions {
           display: flex;
           flex-wrap: wrap;
@@ -1078,6 +1131,11 @@ function filenameFromPath(path: string) {
 
 function isTestCaseDoc(doc: VDocItem) {
   return doc.type.startsWith("tc_");
+}
+
+function badgeList(doc: VDocItem) {
+  const badges = doc.badges ?? {};
+  return [badges.content_review, badges.pdf, badges.replay].filter(Boolean) as VDocBadge[];
 }
 
 function pdfUrl(url: string) {
